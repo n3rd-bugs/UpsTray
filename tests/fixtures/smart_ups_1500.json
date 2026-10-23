@@ -1,0 +1,1565 @@
+{
+ "_comment": "APC Smart-UPS 1500 (SUA1500I, firmware 653.13.I, USB firmware 1.5) on mains, charging, recorded with UpsTray --dump; serial number and UPS name replaced.",
+ "buttons_on": {
+  "51:132:6": [],
+  "51:133:6": [
+   68,
+   208,
+   209
+  ],
+  "51:65414:6": [],
+  "7:132:2": [],
+  "7:133:2": [
+   68,
+   208,
+   209
+  ],
+  "7:65414:2": []
+ },
+ "fields": [
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 255,
+   "logical_min": 0,
+   "name": "iProduct",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 1,
+   "report_id": 1,
+   "units": 0,
+   "usage": 254
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 255,
+   "logical_min": 0,
+   "name": "iSerialNumber",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 2,
+   "report_id": 2,
+   "units": 0,
+   "usage": 255
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 255,
+   "logical_min": 0,
+   "name": "iManufacturer",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 3,
+   "report_id": 3,
+   "units": 0,
+   "usage": 253
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 255,
+   "logical_min": 0,
+   "name": "iOEMInformation",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 3,
+   "report_id": 4,
+   "units": 0,
+   "usage": 143
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 255,
+   "logical_min": 0,
+   "name": "iDeviceChemistry",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 4,
+   "report_id": 5,
+   "units": 0,
+   "usage": 137
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 255,
+   "logical_min": 0,
+   "name": "Rechargeable",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 1,
+   "report_id": 6,
+   "units": 0,
+   "usage": 139
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 255,
+   "logical_min": 0,
+   "name": "CapacityMode",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 2,
+   "report_id": 6,
+   "units": 0,
+   "usage": 44
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 100,
+   "logical_min": 0,
+   "name": "DesignCapacity",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 100,
+   "report_id": 14,
+   "units": 0,
+   "usage": 131
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 100,
+   "logical_min": 0,
+   "name": "FullChargeCapacity",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 100,
+   "report_id": 14,
+   "units": 0,
+   "usage": 103
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 100,
+   "logical_min": 0,
+   "name": "RemainingCapacity",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 99,
+   "report_id": 12,
+   "units": 0,
+   "usage": 102
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 100,
+   "logical_min": 0,
+   "name": "CapacityGranularity1",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 1,
+   "report_id": 16,
+   "units": 0,
+   "usage": 141
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 100,
+   "logical_min": 0,
+   "name": "CapacityGranularity2",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 1,
+   "report_id": 16,
+   "units": 0,
+   "usage": 142
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 100,
+   "logical_min": 0,
+   "name": "WarningCapacityLimit",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 50,
+   "report_id": 15,
+   "units": 0,
+   "usage": 140
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 100,
+   "logical_min": 0,
+   "name": "RemainingCapacityLimit",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 98,
+   "report_id": 17,
+   "units": 0,
+   "usage": 41
+  },
+  {
+   "bits": 16,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "ManufactureDate",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 21898,
+   "report_id": 9,
+   "units": 0,
+   "usage": 133
+  },
+  {
+   "bits": 16,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "RunTimeToEmpty",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 3420,
+   "report_id": 13,
+   "units": 4097,
+   "usage": 104
+  },
+  {
+   "bits": 16,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 32767,
+   "logical_min": -1,
+   "name": "DelayBeforeShutdown",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 65535,
+   "report_id": 18,
+   "units": 4097,
+   "usage": 87
+  },
+  {
+   "bits": 24,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 1295640,
+   "logical_min": -1,
+   "name": "DelayBeforeReboot",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 16777215,
+   "report_id": 19,
+   "units": 4097,
+   "usage": 85
+  },
+  {
+   "bits": 24,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 1380,
+   "logical_min": 120,
+   "name": "RemainingTimeLimit",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 120,
+   "report_id": 8,
+   "units": 4097,
+   "usage": 42
+  },
+  {
+   "bits": 16,
+   "exponent": 5,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "ConfigVoltage",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 2400,
+   "report_id": 10,
+   "units": 15782177,
+   "usage": 64
+  },
+  {
+   "bits": 16,
+   "exponent": 5,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "Voltage",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 2727,
+   "report_id": 11,
+   "units": 15782177,
+   "usage": 48
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 1,
+   "logical_max": 3,
+   "logical_min": 1,
+   "name": "AudibleAlarmControl",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PowerSummary"
+   ],
+   "raw": 2,
+   "report_id": 20,
+   "units": 0,
+   "usage": 90
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 3,
+   "logical_max": 6,
+   "logical_min": 0,
+   "name": "Test",
+   "page": 132,
+   "path": [
+    "UPS",
+    "Battery"
+   ],
+   "raw": 6,
+   "report_id": 22,
+   "units": 0,
+   "usage": 88
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 3,
+   "logical_max": 90,
+   "logical_min": 0,
+   "name": "APC 0x0019",
+   "page": 65414,
+   "path": [
+    "UPS",
+    "Battery"
+   ],
+   "raw": 0,
+   "report_id": 23,
+   "units": 0,
+   "usage": 25
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 3,
+   "logical_max": 3,
+   "logical_min": 0,
+   "name": "APC 0x001A",
+   "page": 65414,
+   "path": [
+    "UPS",
+    "Battery"
+   ],
+   "raw": 0,
+   "report_id": 27,
+   "units": 0,
+   "usage": 26
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 3,
+   "logical_max": 255,
+   "logical_min": 0,
+   "name": "APC 0x001B",
+   "page": 65414,
+   "path": [
+    "UPS",
+    "Battery"
+   ],
+   "raw": 1,
+   "report_id": 28,
+   "units": 0,
+   "usage": 27
+  },
+  {
+   "bits": 16,
+   "exponent": 0,
+   "kind": "value",
+   "link": 3,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "ManufactureDate",
+   "page": 133,
+   "path": [
+    "UPS",
+    "Battery"
+   ],
+   "raw": 23790,
+   "report_id": 21,
+   "units": 0,
+   "usage": 133
+  },
+  {
+   "bits": 16,
+   "exponent": 15,
+   "kind": "value",
+   "link": 3,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "RemainingCapacity",
+   "page": 133,
+   "path": [
+    "UPS",
+    "Battery"
+   ],
+   "raw": 990,
+   "report_id": 24,
+   "units": 0,
+   "usage": 102
+  },
+  {
+   "bits": 16,
+   "exponent": 0,
+   "kind": "value",
+   "link": 3,
+   "logical_max": 1380,
+   "logical_min": 120,
+   "name": "RemainingTimeLimit",
+   "page": 133,
+   "path": [
+    "UPS",
+    "Battery"
+   ],
+   "raw": 120,
+   "report_id": 26,
+   "units": 4097,
+   "usage": 42
+  },
+  {
+   "bits": 16,
+   "exponent": 0,
+   "kind": "value",
+   "link": 3,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "RunTimeToEmpty",
+   "page": 133,
+   "path": [
+    "UPS",
+    "Battery"
+   ],
+   "raw": 3420,
+   "report_id": 25,
+   "units": 4097,
+   "usage": 104
+  },
+  {
+   "bits": 16,
+   "exponent": 15,
+   "kind": "value",
+   "link": 3,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "Temperature",
+   "page": 132,
+   "path": [
+    "UPS",
+    "Battery"
+   ],
+   "raw": 3077,
+   "report_id": 30,
+   "units": 65537,
+   "usage": 54
+  },
+  {
+   "bits": 16,
+   "exponent": 5,
+   "kind": "value",
+   "link": 3,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "ConfigVoltage",
+   "page": 132,
+   "path": [
+    "UPS",
+    "Battery"
+   ],
+   "raw": 2400,
+   "report_id": 31,
+   "units": 15782177,
+   "usage": 64
+  },
+  {
+   "bits": 16,
+   "exponent": 5,
+   "kind": "value",
+   "link": 3,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "Voltage",
+   "page": 132,
+   "path": [
+    "UPS",
+    "Battery"
+   ],
+   "raw": 2727,
+   "report_id": 29,
+   "units": 15782177,
+   "usage": 48
+  },
+  {
+   "bits": 16,
+   "exponent": 6,
+   "kind": "value",
+   "link": 4,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "Voltage",
+   "page": 132,
+   "path": [
+    "UPS",
+    "Input"
+   ],
+   "raw": 2347,
+   "report_id": 32,
+   "units": 15782177,
+   "usage": 48
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 4,
+   "logical_max": 10,
+   "logical_min": 0,
+   "name": "APC 0x0052",
+   "page": 65414,
+   "path": [
+    "UPS",
+    "Input"
+   ],
+   "raw": 3,
+   "report_id": 33,
+   "units": 0,
+   "usage": 82
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 4,
+   "logical_max": 2,
+   "logical_min": 0,
+   "name": "APC 0x0061",
+   "page": 65414,
+   "path": [
+    "UPS",
+    "Input"
+   ],
+   "raw": 2,
+   "report_id": 34,
+   "units": 0,
+   "usage": 97
+  },
+  {
+   "bits": 16,
+   "exponent": 15,
+   "kind": "value",
+   "link": 5,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "PercentLoad",
+   "page": 132,
+   "path": [
+    "UPS",
+    "Output"
+   ],
+   "raw": 741,
+   "report_id": 44,
+   "units": 0,
+   "usage": 53
+  },
+  {
+   "bits": 16,
+   "exponent": 14,
+   "kind": "value",
+   "link": 5,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "Frequency",
+   "page": 132,
+   "path": [
+    "UPS",
+    "Output"
+   ],
+   "raw": 5000,
+   "report_id": 42,
+   "units": 61441,
+   "usage": 50
+  },
+  {
+   "bits": 16,
+   "exponent": 6,
+   "kind": "value",
+   "link": 5,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "Voltage",
+   "page": 132,
+   "path": [
+    "UPS",
+    "Output"
+   ],
+   "raw": 2347,
+   "report_id": 43,
+   "units": 15782177,
+   "usage": 48
+  },
+  {
+   "bits": 16,
+   "exponent": 7,
+   "kind": "value",
+   "link": 5,
+   "logical_max": 240,
+   "logical_min": 220,
+   "name": "ConfigVoltage",
+   "page": 132,
+   "path": [
+    "UPS",
+    "Output"
+   ],
+   "raw": 220,
+   "report_id": 45,
+   "units": 15782177,
+   "usage": 64
+  },
+  {
+   "bits": 16,
+   "exponent": 7,
+   "kind": "value",
+   "link": 5,
+   "logical_max": 265,
+   "logical_min": 253,
+   "name": "HighVoltageTransfer",
+   "page": 132,
+   "path": [
+    "UPS",
+    "Output"
+   ],
+   "raw": 265,
+   "report_id": 35,
+   "units": 15782177,
+   "usage": 84
+  },
+  {
+   "bits": 16,
+   "exponent": 7,
+   "kind": "value",
+   "link": 5,
+   "logical_max": 208,
+   "logical_min": 196,
+   "name": "LowVoltageTransfer",
+   "page": 132,
+   "path": [
+    "UPS",
+    "Output"
+   ],
+   "raw": 196,
+   "report_id": 36,
+   "units": 15782177,
+   "usage": 83
+  },
+  {
+   "bits": 16,
+   "exponent": 0,
+   "kind": "value",
+   "link": 5,
+   "logical_max": 420,
+   "logical_min": 0,
+   "name": "APC 0x007E",
+   "page": 65414,
+   "path": [
+    "UPS",
+    "Output"
+   ],
+   "raw": 0,
+   "report_id": 37,
+   "units": 4097,
+   "usage": 126
+  },
+  {
+   "bits": 16,
+   "exponent": 0,
+   "kind": "value",
+   "link": 5,
+   "logical_max": 630,
+   "logical_min": 0,
+   "name": "APC 0x0076",
+   "page": 65414,
+   "path": [
+    "UPS",
+    "Output"
+   ],
+   "raw": 180,
+   "report_id": 38,
+   "units": 4097,
+   "usage": 118
+  },
+  {
+   "bits": 16,
+   "exponent": 0,
+   "kind": "value",
+   "link": 5,
+   "logical_max": 32767,
+   "logical_min": -1,
+   "name": "DelayBeforeShutdown",
+   "page": 132,
+   "path": [
+    "UPS",
+    "Output"
+   ],
+   "raw": 65535,
+   "report_id": 39,
+   "units": 4097,
+   "usage": 87
+  },
+  {
+   "bits": 16,
+   "exponent": 0,
+   "kind": "value",
+   "link": 5,
+   "logical_max": 32767,
+   "logical_min": -1,
+   "name": "DelayBeforeStartup",
+   "page": 132,
+   "path": [
+    "UPS",
+    "Output"
+   ],
+   "raw": 65535,
+   "report_id": 40,
+   "units": 4097,
+   "usage": 86
+  },
+  {
+   "bits": 24,
+   "exponent": 0,
+   "kind": "value",
+   "link": 5,
+   "logical_max": 1295640,
+   "logical_min": -1,
+   "name": "DelayBeforeReboot",
+   "page": 132,
+   "path": [
+    "UPS",
+    "Output"
+   ],
+   "raw": 16777215,
+   "report_id": 41,
+   "units": 4097,
+   "usage": 85
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 0,
+   "logical_max": 255,
+   "logical_min": 0,
+   "name": "iProduct",
+   "page": 132,
+   "path": [
+    "UPS"
+   ],
+   "raw": 5,
+   "report_id": 46,
+   "units": 0,
+   "usage": 254
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 0,
+   "logical_max": 255,
+   "logical_min": 0,
+   "name": "iSerialNumber",
+   "page": 132,
+   "path": [
+    "UPS"
+   ],
+   "raw": 2,
+   "report_id": 47,
+   "units": 0,
+   "usage": 255
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 0,
+   "logical_max": 255,
+   "logical_min": 0,
+   "name": "iManufacturer",
+   "page": 132,
+   "path": [
+    "UPS"
+   ],
+   "raw": 3,
+   "report_id": 48,
+   "units": 0,
+   "usage": 253
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 0,
+   "logical_max": 255,
+   "logical_min": 0,
+   "name": "iName",
+   "page": 132,
+   "path": [
+    "UPS"
+   ],
+   "raw": 6,
+   "report_id": 49,
+   "units": 0,
+   "usage": 1
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 0,
+   "logical_max": 255,
+   "logical_min": 0,
+   "name": "APC 0x0042",
+   "page": 65414,
+   "path": [
+    "UPS"
+   ],
+   "raw": 7,
+   "report_id": 52,
+   "units": 0,
+   "usage": 66
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 0,
+   "logical_max": 255,
+   "logical_min": 0,
+   "name": "APC 0x0079",
+   "page": 65414,
+   "path": [
+    "UPS"
+   ],
+   "raw": 8,
+   "report_id": 55,
+   "units": 0,
+   "usage": 121
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 0,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "APC 0x0072",
+   "page": 65414,
+   "path": [
+    "UPS"
+   ],
+   "raw": 1,
+   "report_id": 50,
+   "units": 0,
+   "usage": 114
+  },
+  {
+   "bits": 16,
+   "exponent": 0,
+   "kind": "value",
+   "link": 0,
+   "logical_max": 65535,
+   "logical_min": 0,
+   "name": "ManufactureDate",
+   "page": 133,
+   "path": [
+    "UPS"
+   ],
+   "raw": 21898,
+   "report_id": 53,
+   "units": 0,
+   "usage": 133
+  },
+  {
+   "bits": 32,
+   "exponent": 0,
+   "kind": "value",
+   "link": 0,
+   "logical_max": 2147483647,
+   "logical_min": 0,
+   "name": "APC 0x0027",
+   "page": 65414,
+   "path": [
+    "UPS"
+   ],
+   "raw": 0,
+   "report_id": 62,
+   "units": 0,
+   "usage": 39
+  },
+  {
+   "bits": 32,
+   "exponent": 0,
+   "kind": "value",
+   "link": 0,
+   "logical_max": 2147483647,
+   "logical_min": 0,
+   "name": "APC 0x0028",
+   "page": 65414,
+   "path": [
+    "UPS"
+   ],
+   "raw": 0,
+   "report_id": 63,
+   "units": 0,
+   "usage": 40
+  },
+  {
+   "bits": 8,
+   "exponent": 0,
+   "kind": "value",
+   "link": 0,
+   "logical_max": 3,
+   "logical_min": 1,
+   "name": "AudibleAlarmControl",
+   "page": 132,
+   "path": [
+    "UPS"
+   ],
+   "raw": 2,
+   "report_id": 54,
+   "units": 0,
+   "usage": 90
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 2,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "Charging",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary",
+    "PresentStatus"
+   ],
+   "report_id": 7,
+   "units": 0,
+   "usage": 68
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 2,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "Discharging",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary",
+    "PresentStatus"
+   ],
+   "report_id": 7,
+   "units": 0,
+   "usage": 69
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 2,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "ACPresent",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary",
+    "PresentStatus"
+   ],
+   "report_id": 7,
+   "units": 0,
+   "usage": 208
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 2,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "BatteryPresent",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary",
+    "PresentStatus"
+   ],
+   "report_id": 7,
+   "units": 0,
+   "usage": 209
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 2,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "BelowRemainingCapacityLimit",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary",
+    "PresentStatus"
+   ],
+   "report_id": 7,
+   "units": 0,
+   "usage": 66
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 2,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "ShutdownRequested",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PowerSummary",
+    "PresentStatus"
+   ],
+   "report_id": 7,
+   "units": 0,
+   "usage": 104
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 2,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "ShutdownImminent",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PowerSummary",
+    "PresentStatus"
+   ],
+   "report_id": 7,
+   "units": 0,
+   "usage": 105
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 2,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "RemainingTimeLimitExpired",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary",
+    "PresentStatus"
+   ],
+   "report_id": 7,
+   "units": 0,
+   "usage": 67
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 2,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "CommunicationLost",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PowerSummary",
+    "PresentStatus"
+   ],
+   "report_id": 7,
+   "units": 0,
+   "usage": 115
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 2,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "NeedReplacement",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary",
+    "PresentStatus"
+   ],
+   "report_id": 7,
+   "units": 0,
+   "usage": 75
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 2,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "Overload",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PowerSummary",
+    "PresentStatus"
+   ],
+   "report_id": 7,
+   "units": 0,
+   "usage": 101
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 2,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "VoltageNotRegulated",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PowerSummary",
+    "PresentStatus"
+   ],
+   "report_id": 7,
+   "units": 0,
+   "usage": 219
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 2,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "APC 0x0080",
+   "page": 65414,
+   "path": [
+    "UPS",
+    "PowerSummary",
+    "PresentStatus"
+   ],
+   "report_id": 7,
+   "units": 0,
+   "usage": 128
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 6,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "Charging",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PresentStatus"
+   ],
+   "report_id": 51,
+   "units": 0,
+   "usage": 68
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 6,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "Discharging",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PresentStatus"
+   ],
+   "report_id": 51,
+   "units": 0,
+   "usage": 69
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 6,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "ACPresent",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PresentStatus"
+   ],
+   "report_id": 51,
+   "units": 0,
+   "usage": 208
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 6,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "BatteryPresent",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PresentStatus"
+   ],
+   "report_id": 51,
+   "units": 0,
+   "usage": 209
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 6,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "BelowRemainingCapacityLimit",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PresentStatus"
+   ],
+   "report_id": 51,
+   "units": 0,
+   "usage": 66
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 6,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "ShutdownRequested",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PresentStatus"
+   ],
+   "report_id": 51,
+   "units": 0,
+   "usage": 104
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 6,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "ShutdownImminent",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PresentStatus"
+   ],
+   "report_id": 51,
+   "units": 0,
+   "usage": 105
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 6,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "RemainingTimeLimitExpired",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PresentStatus"
+   ],
+   "report_id": 51,
+   "units": 0,
+   "usage": 67
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 6,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "CommunicationLost",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PresentStatus"
+   ],
+   "report_id": 51,
+   "units": 0,
+   "usage": 115
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 6,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "NeedReplacement",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PresentStatus"
+   ],
+   "report_id": 51,
+   "units": 0,
+   "usage": 75
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 6,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "Overload",
+   "page": 132,
+   "path": [
+    "UPS",
+    "PresentStatus"
+   ],
+   "report_id": 51,
+   "units": 0,
+   "usage": 101
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 6,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "VoltageNotRegulated",
+   "page": 133,
+   "path": [
+    "UPS",
+    "PresentStatus"
+   ],
+   "report_id": 51,
+   "units": 0,
+   "usage": 219
+  },
+  {
+   "bits": 1,
+   "exponent": 0,
+   "kind": "button",
+   "link": 6,
+   "logical_max": 1,
+   "logical_min": 0,
+   "name": "APC 0x0080",
+   "page": 65414,
+   "path": [
+    "UPS",
+    "PresentStatus"
+   ],
+   "report_id": 51,
+   "units": 0,
+   "usage": 128
+  }
+ ],
+ "info": {
+  "chemistry": "PbAc",
+  "firmware": "653.13.I",
+  "manufacturer": "American Power Conversion",
+  "model": "Smart-UPS 1500",
+  "name": "ups",
+  "product_id": 2,
+  "product_string": "Smart-UPS 1500 FW:653.13.I USB FW:1.5",
+  "serial": "AS0000000000",
+  "usb_firmware": "1.5",
+  "vendor_id": 1309
+ },
+ "nodes": [
+  {
+   "kind": 1,
+   "page": 132,
+   "parent": 0,
+   "usage": 4
+  },
+  {
+   "kind": 2,
+   "page": 132,
+   "parent": 0,
+   "usage": 36
+  },
+  {
+   "kind": 2,
+   "page": 132,
+   "parent": 1,
+   "usage": 2
+  },
+  {
+   "kind": 0,
+   "page": 132,
+   "parent": 0,
+   "usage": 18
+  },
+  {
+   "kind": 0,
+   "page": 132,
+   "parent": 0,
+   "usage": 26
+  },
+  {
+   "kind": 0,
+   "page": 132,
+   "parent": 0,
+   "usage": 28
+  },
+  {
+   "kind": 2,
+   "page": 132,
+   "parent": 0,
+   "usage": 2
+  }
+ ]
+}
