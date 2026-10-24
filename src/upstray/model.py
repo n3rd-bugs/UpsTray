@@ -239,6 +239,7 @@ class Reading:
     derive: object = None    # callable(values) -> float or None, for derived readings
     resolution: float = 1.0  # smallest step of the physical value (decimals for display)
     deps: tuple = ()         # keys a derived reading needs in the same snapshot
+    label: str = ""          # short caption for the tray icon (VIN, LOAD ...); "" = none
 
     def decimals(self):
         if self.resolution >= 1:
@@ -267,6 +268,15 @@ def _finest(fields, page, usage, where):
     return min(cands, key=lambda f: decode_units(f.units, f.exponent)[0])
 
 
+# Captions drawn above the value in the default icon style. Short: about 6 px tall
+# at 150 % scaling, so four or five narrow capitals at most.
+TRAY_LABELS = {
+    "input_voltage": "VIN", "output_voltage": "VOUT", "battery_voltage": "VBAT", "load": "LOAD",
+    "input_frequency": "IN HZ", "output_frequency": "HZ", "output_current": "AMPS",
+    "apparent_power": "VA", "real_power": "WATT", "charge": "BATT", "runtime": "RUN",
+    "temperature": "TEMP",
+}
+
 TEST_RESULTS = {1: "Passed", 2: "Warning", 3: "Error", 4: "Aborted", 5: "In progress",
                 6: "No test initiated"}
 ALARM_STATES = {1: "Disabled", 2: "Enabled", 3: "Muted"}
@@ -289,7 +299,8 @@ def build_readings(fields, nominal_watts=0, capacity_mode=None):
             return None
         scale, symbol = decode_units(f.units, f.exponent)
         r = Reading(key=key, name=name, group=group, unit=symbol if unit is None else unit, field=f,
-                    scale=scale, kind=kind, tray=tray, enum=enum, resolution=scale * f.range_ratio())
+                    scale=scale, kind=kind, tray=tray, enum=enum, resolution=scale * f.range_ratio(),
+                    label=TRAY_LABELS.get(key, ""))
         readings.append(r)
         used.add(id(f))
         return r
@@ -316,7 +327,7 @@ def build_readings(fields, nominal_watts=0, capacity_mode=None):
                 return pct * watts / 100.0
             readings.append(Reading(key="real_power", name="Load power", group="Power", unit="W",
                                     kind="derived", derive=derive, resolution=1,
-                                    deps=("load", "_rated_watts")))
+                                    deps=("load", "_rated_watts"), label=TRAY_LABELS["real_power"]))
             if rated is not None:
                 add("_rated_watts", "Rated power", "Settings", rated, "W", tray=False)
     rsoc = _first(fields, BATTERY, 0x64, ("Battery", "PowerSummary"))
@@ -342,7 +353,8 @@ def build_readings(fields, nominal_watts=0, capacity_mode=None):
                 return max(0.0, min(100.0, rem * 100.0 / tot))
             readings.append(Reading(key="charge", name="Battery charge", group="Battery", unit="%",
                                     kind="derived", derive=charge_pct, resolution=0.1,
-                                    deps=("_remaining_capacity", "_full_capacity")))
+                                    deps=("_remaining_capacity", "_full_capacity"),
+                                    label=TRAY_LABELS["charge"]))
     else:
         add("charge", "Battery charge", "Battery",
             _finest(fields, BATTERY, 0x66, ("Battery", "PowerSummary")), "%")
@@ -517,12 +529,15 @@ def _short_number(value, decimals=2):
     return ["%d" % round(value)]
 
 
-def tray_texts(reading, value, temperature_unit="C"):
+def tray_texts(reading, value, temperature_unit="C", compact=False):
     """Candidate texts for a tray icon, most informative first; the icon renderer
-    uses the first one that fits at a readable size."""
+    uses the first one that fits at a readable size. compact: the icon has a label
+    (LOAD, BATT ...), so a % sign would only make the digits smaller."""
     if value is None:
         return ["--"]
     unit = reading.unit
+    if compact and unit == "%":
+        return ["%d" % round(value)]
     if reading.kind == "runtime":
         m = int(round(value))
         return [str(m)] if m < 1000 else ["%dh" % (m // 60)]

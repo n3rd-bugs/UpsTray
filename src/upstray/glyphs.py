@@ -1,12 +1,17 @@
-"""Tray icon images: a short text such as '231' or '75%' drawn into an icon.
+"""Tray icon images: a value such as '231', optionally with a small label above it
+('VIN', 'LOAD') or a second value under it, drawn into a 32-bit icon with alpha.
 
-GDI draws white antialiased text on black into a 32-bit DIB; the brightness of
-each pixel becomes its alpha, so the text gets a real alpha channel and looks
-right on light, dark and transparent taskbars. Fonts are tried from the most
-condensed to the widest and the largest size that fits wins.
+Each text run is drawn by GDI (white, antialiased, on black) into its own
+bitmap and cropped to its ink box, so runs are placed and centred to the pixel
+whatever the font metrics say. The coverage becomes alpha with a slight gamma
+lift, which keeps dark text on a light taskbar as solid as the system's own
+text. The value uses the boldest condensed face available (Bahnschrift Bold
+Condensed on Windows 10/11) at the largest size that fits.
 """
 import ctypes
 import ctypes.wintypes as wt
+import struct
+import zlib
 
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -14,8 +19,6 @@ user32 = ctypes.WinDLL("user32", use_last_error=True)
 SM_CXSMICON = 49
 DIB_RGB_COLORS = 0
 BI_RGB = 0
-FW_SEMIBOLD = 600
-FW_BOLD = 700
 DEFAULT_CHARSET = 1
 OUT_TT_PRECIS = 4
 CLIP_DEFAULT_PRECIS = 0
@@ -23,10 +26,20 @@ ANTIALIASED_QUALITY = 4
 DEFAULT_PITCH = 0
 TRANSPARENT = 1
 
-# Condensed faces first: three digits must fit a 16 px icon. GDI exposes the named
-# instances of the Bahnschrift variable font as separate families (names cut at 31).
-FONT_FACES = ("Bahnschrift SemiBold Condensed", "Bahnschrift SemiBold SemiConden",
-              "Bahnschrift Condensed", "Arial Narrow", "Segoe UI Semibold", "Segoe UI", "Arial")
+# (face, weight) in order of preference; the first one installed is used for every
+# icon, so all readings look alike. GDI exposes Bahnschrift's named instances as
+# families: 'Bahnschrift Condensed' at weight 700 is Bold Condensed.
+VALUE_FACES = (("Bahnschrift Condensed", 700), ("Bahnschrift SemiBold Condensed", 600),
+               ("Arial Narrow", 700), ("Segoe UI", 700), ("Arial", 700))
+# The label uses the system UI face: at 6-8 px its open letters read better than a
+# condensed face (tested at 150 % on light and dark taskbars).
+LABEL_FACES = (("Segoe UI Semibold", 600), ("Segoe UI", 600), ("Arial", 700))
+
+LABEL_ALPHA = 1.0        # full strength: anything lighter is unreadable at this size
+LABEL_FRACTION = 0.33    # label row height as a share of the icon
+VALUE_REFERENCE = "888"  # every value gets the digit height this text fits at (consistent icons)
+GAMMA = 0.75             # alpha = coverage ** GAMMA: firmer antialiased edges
+MIN_LABEL_SIZE = 20      # icons smaller than this get no label (it would be unreadable)
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -45,17 +58,6 @@ class ICONINFO(ctypes.Structure):
                 ("hbmMask", wt.HBITMAP), ("hbmColor", wt.HBITMAP)]
 
 
-class TEXTMETRICW(ctypes.Structure):
-    _fields_ = [("tmHeight", wt.LONG), ("tmAscent", wt.LONG), ("tmDescent", wt.LONG),
-                ("tmInternalLeading", wt.LONG), ("tmExternalLeading", wt.LONG),
-                ("tmAveCharWidth", wt.LONG), ("tmMaxCharWidth", wt.LONG), ("tmWeight", wt.LONG),
-                ("tmOverhang", wt.LONG), ("tmDigitizedAspectX", wt.LONG),
-                ("tmDigitizedAspectY", wt.LONG), ("tmFirstChar", wt.WCHAR), ("tmLastChar", wt.WCHAR),
-                ("tmDefaultChar", wt.WCHAR), ("tmBreakChar", wt.WCHAR), ("tmItalic", ctypes.c_ubyte),
-                ("tmUnderlined", ctypes.c_ubyte), ("tmStruckOut", ctypes.c_ubyte),
-                ("tmPitchAndFamily", ctypes.c_ubyte), ("tmCharSet", ctypes.c_ubyte)]
-
-
 gdi32.CreateCompatibleDC.argtypes = [wt.HDC]
 gdi32.CreateCompatibleDC.restype = wt.HDC
 gdi32.DeleteDC.argtypes = [wt.HDC]
@@ -72,8 +74,6 @@ gdi32.CreateFontW.restype = wt.HFONT
 gdi32.SetBkMode.argtypes = [wt.HDC, ctypes.c_int]
 gdi32.SetTextColor.argtypes = [wt.HDC, wt.COLORREF]
 gdi32.TextOutW.argtypes = [wt.HDC, ctypes.c_int, ctypes.c_int, wt.LPCWSTR, ctypes.c_int]
-gdi32.GetTextExtentPoint32W.argtypes = [wt.HDC, wt.LPCWSTR, ctypes.c_int, ctypes.POINTER(wt.SIZE)]
-gdi32.GetTextMetricsW.argtypes = [wt.HDC, ctypes.POINTER(TEXTMETRICW)]
 gdi32.GetTextFaceW.argtypes = [wt.HDC, ctypes.c_int, wt.LPWSTR]
 gdi32.GetTextFaceW.restype = ctypes.c_int
 gdi32.GdiFlush.restype = wt.BOOL
@@ -82,8 +82,6 @@ user32.CreateIconIndirect.restype = wt.HICON
 user32.DestroyIcon.argtypes = [wt.HICON]
 user32.GetSystemMetrics.argtypes = [ctypes.c_int]
 
-_available_faces = None
-
 
 def tray_icon_size():
     """Pixel size of a small icon at the current (system) DPI: 16 at 100 %, 24 at 150 %."""
@@ -91,15 +89,25 @@ def tray_icon_size():
     return max(16, min(64, size or 16))
 
 
-def _faces(hdc):
-    """The FONT_FACES that exist (GDI silently substitutes missing faces)."""
-    global _available_faces
-    if _available_faces is None:
-        found = []
-        buf = ctypes.create_unicode_buffer(64)
-        for face in FONT_FACES:
-            font = gdi32.CreateFontW(-12, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS,
-                                     CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, face)
+def _font(face, weight, px):
+    return gdi32.CreateFontW(-px, 0, 0, 0, weight, 0, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, face)
+
+
+_chosen = {}
+
+
+def _pick(candidates):
+    """First (face, weight) GDI really has (it silently substitutes missing faces)."""
+    key = tuple(candidates)
+    if key in _chosen:
+        return _chosen[key]
+    hdc = gdi32.CreateCompatibleDC(None)
+    buf = ctypes.create_unicode_buffer(64)
+    pick = None
+    try:
+        for face, weight in candidates:
+            font = _font(face, weight, 12)
             if not font:
                 continue
             old = gdi32.SelectObject(hdc, font)
@@ -107,78 +115,173 @@ def _faces(hdc):
             gdi32.SelectObject(hdc, old)
             gdi32.DeleteObject(font)
             if buf.value.lower() == face.lower():
-                found.append(face)
-        _available_faces = found or ["Segoe UI"]
-    return _available_faces
-
-
-def _make_font(face, px):
-    return gdi32.CreateFontW(-px, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, OUT_TT_PRECIS,
-                             CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, face)
-
-
-def _measure(hdc, face, px, text):
-    """(width, digit height, ascent, internal leading) of text in face at px (em height)."""
-    font = _make_font(face, px)
-    if not font:
-        return None
-    old = gdi32.SelectObject(hdc, font)
-    try:
-        sz = wt.SIZE()
-        gdi32.GetTextExtentPoint32W(hdc, text, len(text), ctypes.byref(sz))
-        tm = TEXTMETRICW()
-        gdi32.GetTextMetricsW(hdc, ctypes.byref(tm))
-        # digits reach the cap height, roughly ascent minus internal leading
-        cap = tm.tmAscent - tm.tmInternalLeading
-        return sz.cx, cap, tm.tmAscent, tm.tmInternalLeading
+                pick = (face, weight)
+                break
     finally:
-        gdi32.SelectObject(hdc, old)
-        gdi32.DeleteObject(font)
+        gdi32.DeleteDC(hdc)
+    _chosen[key] = pick or ("Segoe UI", 700)
+    return _chosen[key]
 
 
-_layout_cache = {}
+def value_face():
+    return _pick(VALUE_FACES)
 
 
-def choose_layout(hdc, texts, size, min_ratio=0.5):
-    """Pick (text, face, px) with the tallest digits that fit size x size.
+def label_face():
+    return _pick(LABEL_FACES)
 
-    The first candidate text that reaches min_ratio * size digit height wins; when
-    none does, the candidate with the tallest digits is used anyway. Results are
-    cached: the same few hundred texts come back all the time.
-    """
-    key = (tuple(texts), size, min_ratio)
-    hit = _layout_cache.get(key)
+
+_ink_cache = {}
+
+
+def ink(text, face, weight, px):
+    """(width, height, rows) of a text run's ink box at em height px; rows are bytes
+    of coverage 0..255 (white text drawn on black)."""
+    key = (text, face, weight, px)
+    hit = _ink_cache.get(key)
     if hit is not None:
         return hit
-    if len(_layout_cache) > 2048:
-        _layout_cache.clear()
-    hit = _layout_cache[key] = _choose_layout(hdc, texts, size, min_ratio)
-    return hit
+    if len(_ink_cache) > 4096:
+        _ink_cache.clear()
+    w, h = px * (len(text) + 2), px * 2
+    hdc = gdi32.CreateCompatibleDC(None)
+    if not hdc:
+        raise OSError(ctypes.get_last_error(), "CreateCompatibleDC failed")
+    hbm = font = None
+    try:
+        bmi = BITMAPINFO()
+        hd = bmi.bmiHeader
+        hd.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        hd.biWidth, hd.biHeight, hd.biPlanes, hd.biBitCount, hd.biCompression = w, -h, 1, 32, BI_RGB
+        bits = ctypes.c_void_p()
+        hbm = gdi32.CreateDIBSection(hdc, ctypes.byref(bmi), DIB_RGB_COLORS, ctypes.byref(bits), None, 0)
+        if not hbm or not bits:
+            raise OSError(ctypes.get_last_error(), "CreateDIBSection failed")
+        old_bm = gdi32.SelectObject(hdc, hbm)
+        ctypes.memset(bits, 0, w * h * 4)
+        font = _font(face, weight, px)
+        old_font = gdi32.SelectObject(hdc, font)
+        gdi32.SetBkMode(hdc, TRANSPARENT)
+        gdi32.SetTextColor(hdc, 0x00FFFFFF)
+        gdi32.TextOutW(hdc, px // 2, px // 4, text, len(text))
+        gdi32.GdiFlush()
+        data = bytes((ctypes.c_ubyte * (w * h * 4)).from_address(bits.value))
+        gdi32.SelectObject(hdc, old_font)
+        gdi32.SelectObject(hdc, old_bm)
+    finally:
+        if font:
+            gdi32.DeleteObject(font)
+        if hbm:
+            gdi32.DeleteObject(hbm)
+        gdi32.DeleteDC(hdc)
+    # coverage = brightest channel; crop to the ink box
+    cov = [bytes(max(data[i], data[i + 1], data[i + 2]) for i in range(y * w * 4, (y + 1) * w * 4, 4))
+           for y in range(h)]
+    ys = [y for y in range(h) if any(cov[y])]
+    if not ys:
+        res = (0, 0, [])
+    else:
+        y0, y1 = ys[0], ys[-1]
+        cols = [x for x in range(w) if any(cov[y][x] for y in range(y0, y1 + 1))]
+        x0, x1 = cols[0], cols[-1]
+        res = (x1 - x0 + 1, y1 - y0 + 1, [cov[y][x0:x1 + 1] for y in range(y0, y1 + 1)])
+    _ink_cache[key] = res
+    return res
 
 
-def _choose_layout(hdc, texts, size, min_ratio):
-    best_any = None
+_fit_cache = {}
+
+
+def fit(text, face, weight, max_w, max_h):
+    """(px, width, height) for the largest em size whose ink fits max_w x max_h, or None."""
+    key = (text, face, weight, max_w, max_h)
+    if key in _fit_cache:
+        return _fit_cache[key]
+    if len(_fit_cache) > 4096:
+        _fit_cache.clear()
+    best = None
+    lo, hi = 4, int(max_h * 2.4) + 2
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        w, h, _ = ink(text, face, weight, mid)
+        if 0 < w <= max_w and h <= max_h:
+            best = (mid, w, h)
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    _fit_cache[key] = best
+    return best
+
+
+def _best_value(texts, max_w, max_h, min_ratio=0.85):
+    """(text, px, w, h): the first candidate whose digits reach min_ratio of the room,
+    else the candidate with the tallest digits."""
+    face, weight = value_face()
+    fallback = None
     for text in texts:
-        best = None
-        for face in _faces(hdc):
-            for px in range(int(size * 1.6), 5, -1):
-                m = _measure(hdc, face, px, text)
-                if not m:
-                    break
-                width, cap, _, _ = m
-                if width <= size and cap <= size - 1:
-                    if best is None or cap > best[3]:
-                        best = (text, face, px, cap)
-                    break
-        if best is None:
+        f = fit(text, face, weight, max_w, max_h)
+        if not f:
             continue
-        if best[3] >= size * min_ratio:
-            return best[:3]
-        if best_any is None or best[3] > best_any[3]:
-            best_any = best
-    if best_any:
-        return best_any[:3]
-    return (texts[-1] if texts else "", _faces(hdc)[0], max(6, size // 2))
+        if f[2] >= max_h * min_ratio:
+            return (text,) + f
+        if fallback is None or f[2] > fallback[3]:
+            fallback = (text,) + f
+    return fallback
+
+
+def _blit(canvas, size, rows, x, y, alpha=1.0):
+    for dy, row in enumerate(rows):
+        yy = y + dy
+        if not 0 <= yy < size:
+            continue
+        line = canvas[yy]
+        for dx, c in enumerate(row):
+            xx = x + dx
+            if c and 0 <= xx < size:
+                v = int(c * alpha)
+                if v > line[xx]:
+                    line[xx] = v
+
+
+def layout(texts, size, label=None, second=None):
+    """Coverage canvas (rows of 0..255) and the value text used.
+
+    label: small caption above the value; the caller decides whether the icon is big
+    enough (label_fits), so the drawing and the texts chosen for it always agree.
+    second: candidate texts for a second value under the first (two readings per icon).
+    """
+    canvas = [bytearray(size) for _ in range(size)]
+    face, weight = value_face()
+    texts = list(texts) or ["--"]
+    if second:
+        gap = max(1, size // 12)
+        line_h = (size - gap) // 2
+        a = _best_value(texts, size, line_h)
+        b = _best_value(list(second), size, line_h)
+        if not a or not b:
+            return canvas, texts[0]
+        px = min(a[1], b[1])                       # same digit height on both lines
+        ia, ib = ink(a[0], face, weight, px), ink(b[0], face, weight, px)
+        y = (size - (ia[1] + gap + ib[1]) + 1) // 2
+        _blit(canvas, size, ia[2], (size - ia[0]) // 2, y)
+        _blit(canvas, size, ib[2], (size - ib[0]) // 2, y + ia[1] + gap)
+        return canvas, a[0]
+    top = 0
+    if label:
+        lface, lweight = label_face()
+        f = fit(label, lface, lweight, size, max(5, round(size * LABEL_FRACTION)))
+        if f:
+            _, lw, lh = f
+            _blit(canvas, size, ink(label, lface, lweight, f[0])[2], (size - lw) // 2, 0, LABEL_ALPHA)
+            top = lh + max(1, size // 12)
+    room = size - top
+    ref = fit(VALUE_REFERENCE, face, weight, size, room)
+    best = _best_value(texts, size, min(room, ref[2]) if ref else room)
+    if not best:
+        return canvas, texts[0]
+    text, px, w, h = best
+    _blit(canvas, size, ink(text, face, weight, px)[2], (size - w) // 2, top + (room - h + 1) // 2)
+    return canvas, text
 
 
 def _hex_to_rgb(color):
@@ -186,105 +289,64 @@ def _hex_to_rgb(color):
     return int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16)
 
 
-def render_pixels(texts, color="#FFFFFF", background=None, size=None):
-    """(size, BGRA premultiplied pixel bytes, chosen text) for the best-fitting text."""
-    size = size or tray_icon_size()
-    hdc = gdi32.CreateCompatibleDC(None)
-    if not hdc:
-        raise OSError(ctypes.get_last_error(), "CreateCompatibleDC failed")
-    hbm = None
-    try:
-        bmi = BITMAPINFO()
-        h = bmi.bmiHeader
-        h.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-        h.biWidth, h.biHeight, h.biPlanes, h.biBitCount, h.biCompression = size, -size, 1, 32, BI_RGB
-        bits = ctypes.c_void_p()
-        hbm = gdi32.CreateDIBSection(hdc, ctypes.byref(bmi), DIB_RGB_COLORS, ctypes.byref(bits), None, 0)
-        if not hbm or not bits:
-            raise OSError(ctypes.get_last_error(), "CreateDIBSection failed")
-        old_bm = gdi32.SelectObject(hdc, hbm)
-        ctypes.memset(bits, 0, size * size * 4)
-        text, face, px = choose_layout(hdc, list(texts) or ["--"], size - (2 if background else 0))
-        font = _make_font(face, px)
-        old_font = gdi32.SelectObject(hdc, font)
-        gdi32.SetBkMode(hdc, TRANSPARENT)
-        gdi32.SetTextColor(hdc, 0x00FFFFFF)
-        sz = wt.SIZE()
-        gdi32.GetTextExtentPoint32W(hdc, text, len(text), ctypes.byref(sz))
-        tm = TEXTMETRICW()
-        gdi32.GetTextMetricsW(hdc, ctypes.byref(tm))
-        cap = tm.tmAscent - tm.tmInternalLeading
-        x = (size - sz.cx) // 2
-        y = (size - cap + 1) // 2 - tm.tmInternalLeading
-        gdi32.TextOutW(hdc, x, y, text, len(text))
-        gdi32.GdiFlush()
-        gdi32.SelectObject(hdc, old_font)
-        gdi32.DeleteObject(font)
-        gdi32.SelectObject(hdc, old_bm)
-        n = size * size * 4
-        src = bytes((ctypes.c_ubyte * n).from_address(bits.value))
-    finally:
-        if hbm:
-            gdi32.DeleteObject(hbm)
-        gdi32.DeleteDC(hdc)
-    return size, compose(center(src, size), size, color, background), text
+def _in_round_rect(x, y, size, r):
+    if r <= 0:
+        return True
+    cx = r if x < r else (size - 1 - r if x > size - 1 - r else x)
+    cy = r if y < r else (size - 1 - r if y > size - 1 - r else y)
+    return (x - cx) ** 2 + (y - cy) ** 2 <= r * r + r
 
 
-def center(src, size):
-    """Shift the drawn text so its ink box is centred (font metrics put digits a pixel
-    or two off-centre, and differently per font)."""
-    xs, ys = [], []
-    for i in range(0, len(src), 4):
-        if src[i] or src[i + 1] or src[i + 2]:
-            p = i // 4
-            xs.append(p % size)
-            ys.append(p // size)
-    if not xs:
-        return src
-    dx = int(round((size - 1) / 2.0 - (min(xs) + max(xs)) / 2.0))
-    dy = int(round((size - 1) / 2.0 - (min(ys) + max(ys)) / 2.0))
-    if not dx and not dy:
-        return src
-    out = bytearray(len(src))
-    row = size * 4
-    for y in range(size):
-        sy = y - dy
-        if not 0 <= sy < size:
-            continue
-        for x in range(size):
-            sx = x - dx
-            if 0 <= sx < size:
-                d, s = y * row + x * 4, sy * row + sx * 4
-                out[d:d + 4] = src[s:s + 4]
-    return bytes(out)
+_GAMMA_LUT = bytes(int(round(255 * (c / 255.0) ** GAMMA)) for c in range(256))
 
 
-def compose(coverage_bgra, size, color, background=None):
-    """Turn white-on-black text pixels into premultiplied BGRA: coloured text with
-    alpha = coverage, or light text on an opaque rounded badge."""
-    n = size * size * 4
+def compose(canvas, size, color, background=None):
+    """Premultiplied BGRA: coloured text with alpha from the coverage, or text on an
+    opaque rounded badge."""
     fr, fg, fb = _hex_to_rgb(color)
-    out = bytearray(n)
+    out = bytearray(size * size * 4)
     if background:
         br, bg, bb = _hex_to_rgb(background)
         radius = max(2, size // 5)
-    src = coverage_bgra
-    for i in range(0, n, 4):
-        cov = max(src[i], src[i + 1], src[i + 2])
-        if background:
-            p = i // 4
-            if not _in_round_rect(p % size, p // size, size, radius):
-                continue
-            out[i] = (fb * cov + bb * (255 - cov)) // 255
-            out[i + 1] = (fg * cov + bg * (255 - cov)) // 255
-            out[i + 2] = (fr * cov + br * (255 - cov)) // 255
-            out[i + 3] = 255
-        elif cov:
-            out[i] = fb * cov // 255
-            out[i + 1] = fg * cov // 255
-            out[i + 2] = fr * cov // 255
-            out[i + 3] = cov
+    for y in range(size):
+        row = canvas[y]
+        for x in range(size):
+            i = (y * size + x) * 4
+            cov = _GAMMA_LUT[row[x]]
+            if background:
+                if not _in_round_rect(x, y, size, radius):
+                    continue
+                out[i] = (fb * cov + bb * (255 - cov)) // 255
+                out[i + 1] = (fg * cov + bg * (255 - cov)) // 255
+                out[i + 2] = (fr * cov + br * (255 - cov)) // 255
+                out[i + 3] = 255
+            elif cov:
+                out[i] = fb * cov // 255
+                out[i + 1] = fg * cov // 255
+                out[i + 2] = fr * cov // 255
+                out[i + 3] = cov
     return bytes(out)
+
+
+def label_fits(size):
+    """Labels and stacked pairs need icons of MIN_LABEL_SIZE px or more. Decided on the
+    icon size (not the badge's inner area), the same test the app uses for its texts."""
+    return size >= MIN_LABEL_SIZE
+
+
+def render_pixels(texts, color="#FFFFFF", background=None, size=None, label=None, second=None):
+    """(size, premultiplied BGRA pixels, value text used)."""
+    size = size or tray_icon_size()
+    if not label_fits(size):
+        label = None
+    canvas, text = layout(texts, size - (2 if background else 0), label, second)
+    if background:
+        inner = size - 2
+        padded = [bytearray(size) for _ in range(size)]
+        for y in range(inner):
+            padded[y + 1][1:inner + 1] = canvas[y]
+        canvas = padded
+    return size, compose(canvas, size, color, background), text
 
 
 def make_icon(size, pixels):
@@ -316,20 +378,14 @@ def make_icon(size, pixels):
             gdi32.DeleteDC(hdc)
 
 
-def render(texts, color="#FFFFFF", background=None, size=None):
-    """HICON showing the best-fitting candidate text; the caller must DestroyIcon it.
-
-    color/background are '#RRGGBB'; background None = transparent (text only), else a
-    rounded badge behind the text.
-    """
-    size, pixels, _ = render_pixels(texts, color, background, size)
+def render(texts, color="#FFFFFF", background=None, size=None, label=None, second=None):
+    """HICON for one tray icon; the caller must DestroyIcon it."""
+    size, pixels, _ = render_pixels(texts, color, background, size, label, second)
     return make_icon(size, pixels)
 
 
 def png_bytes(size, pixels):
     """PNG of premultiplied BGRA pixels (previews and tests; no Pillow needed)."""
-    import struct
-    import zlib
     rows = bytearray()
     for y in range(size):
         rows.append(0)
@@ -342,16 +398,31 @@ def png_bytes(size, pixels):
 
     def chunk(tag, data):
         return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-    return (bytes((0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)) + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+    return (bytes((0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A))
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(bytes(rows), 9)) + chunk(b"IEND", b""))
 
 
-def _in_round_rect(x, y, size, r):
-    if r <= 0:
-        return True
-    cx = r if x < r else (size - 1 - r if x > size - 1 - r else x)
-    cy = r if y < r else (size - 1 - r if y > size - 1 - r else y)
-    return (x - cx) ** 2 + (y - cy) ** 2 <= r * r + r
+def png_on(size, pixels, background, zoom=1):
+    """Opaque PNG of the icon over a background colour, scaled up by an integer zoom
+    (nearest neighbour): previews in the Settings window."""
+    br, bg, bb = _hex_to_rgb(background)
+    n = size * zoom
+    rows = bytearray()
+    for y in range(n):
+        rows.append(0)
+        sy = y // zoom
+        for x in range(n):
+            i = (sy * size + x // zoom) * 4
+            b, g, r, a = pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]
+            rows += bytes((min(255, r + br * (255 - a) // 255), min(255, g + bg * (255 - a) // 255),
+                           min(255, b + bb * (255 - a) // 255)))
+
+    def chunk(tag, data):
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    return (bytes((0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A))
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", n, n, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(rows), 6)) + chunk(b"IEND", b""))
 
 
 def destroy(hicon):

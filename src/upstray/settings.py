@@ -16,6 +16,7 @@ DEFAULTS = {
     "reading_colors": {},             # reading key -> #RRGGBB
     "status_colors": True,            # amber text on battery, red when low, grey when offline
     "badge": False,                   # draw the value on a rounded badge instead of bare text
+    "icon_style": "label",            # label (caption + value), large (value only), stacked (two per icon)
     "nominal_watts": 0,               # rated real power, for 'Load power' when the UPS has none
     "low_charge_percent": 20,         # 'low' below this charge (besides the UPS's own warnings)
     "notify_on_battery": False,
@@ -28,6 +29,7 @@ DEFAULTS = {
 }
 
 _COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+ICON_STYLES = ("label", "large", "stacked")
 
 
 def app_dir():
@@ -69,6 +71,7 @@ def normalize(raw):
     s["poll_seconds"] = _int(raw.get("poll_seconds"), DEFAULTS["poll_seconds"], 1, 60)
     s["temperature_unit"] = raw.get("temperature_unit") if raw.get("temperature_unit") in ("C", "F") else "C"
     s["runtime_style"] = raw.get("runtime_style") if raw.get("runtime_style") in ("minutes", "hm") else "minutes"
+    s["icon_style"] = raw.get("icon_style") if raw.get("icon_style") in ICON_STYLES else "label"
     tc = raw.get("text_color")
     s["text_color"] = tc if tc == "auto" or (isinstance(tc, str) and _COLOR.match(tc)) else "auto"
     colors = raw.get("reading_colors")

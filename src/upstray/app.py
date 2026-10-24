@@ -344,8 +344,11 @@ class App:
             self.settings_window.refresh_values()
 
     # -- icons ----------------------------------------------------------------------
-    def effective_text_color(self):
-        tc = self.settings["text_color"]
+    def taskbar_light(self):
+        return taskbar_is_light()
+
+    def effective_text_color(self, s=None):
+        tc = (s or self.settings)["text_color"]
         if tc != "auto":
             return tc
         return "#000000" if taskbar_is_light() else "#FFFFFF"
@@ -356,14 +359,14 @@ class App:
             return "offline" if self.ups is None else "online"
         return snap.status.state
 
-    def _colors(self, key, state):
-        s = self.settings
+    def _colors(self, key, state, s=None):
+        s = s or self.settings
         if s["badge"]:
             return "#FFFFFF", BADGE_COLORS.get(state if s["status_colors"] else "online", "#2D6A31")
         if s["status_colors"] and state in STATUS_TEXT_COLORS:
             light = (s["text_color"] == "auto" and taskbar_is_light()) or s["text_color"] == "#000000"
             return (STATUS_TEXT_COLORS_LIGHT if light else STATUS_TEXT_COLORS)[state], None
-        return s["reading_colors"].get(key) or self.effective_text_color(), None
+        return s["reading_colors"].get(key) or self.effective_text_color(s), None
 
     def _value_text(self, r):
         snap = self.last_snapshot
@@ -382,53 +385,93 @@ class App:
         out = []
         if not self.ups:
             return out
+        skip = skip if isinstance(skip, (tuple, list, set)) else (skip,)
         for key in self.settings["tooltip_readings"]:
-            if key == skip or key not in self.ups.by_key:
+            if key in skip or key not in self.ups.by_key:
                 continue
             r = self.ups.by_key[key]
             out.append("%s %s" % (r.name, self._value_text(r)))
         return out
 
+    def _texts(self, key, s, compact):
+        """Candidate texts for one reading's value ('--' when unknown or offline)."""
+        r = self.ups.by_key.get(key) if self.ups else None
+        snap = self.last_snapshot
+        if r is None or (snap is not None and not snap.status.ok):
+            return ("--",), r
+        value = snap.values.get(key) if snap else None
+        return tuple(model.tray_texts(r, value, s["temperature_unit"], compact=compact)), r
+
+    def icon_style(self, s=None, size=None):
+        """The style that is drawn: labels and stacked pairs need icons of 20 px or more."""
+        s = s or self.settings
+        size = size or self.glyphs.tray_icon_size()
+        style = s.get("icon_style", "label")
+        if style != "large" and not self.glyphs.label_fits(size):
+            return "large"
+        return style
+
+    def icon_plan(self, s=None, keys=None, size=None):
+        """[(uid, texts, fg, bg, tooltip, label, second)] for the tray, or for the Settings
+        preview when s/keys are given."""
+        s = s or self.settings
+        size = size or self.glyphs.tray_icon_size()
+        style = self.icon_style(s, size)
+        state = self._state()
+        title = self.ups.info.title() if self.ups else DISPLAY_NAME
+        status_text = self._status_text()
+        chosen = s["tray_readings"] if keys is None else keys
+        keys = [k for k in chosen if self.ups is None or k in self.ups.by_key]
+        plan = []
+        if not keys:
+            texts = {"online": ("AC",), "battery": ("BAT",), "low": ("LOW",), "alert": ("!",),
+                     "offline": ("--",)}.get(state, ("--",))
+            fg, bg = self._colors("_status", state, s)
+            tip = build_tooltip(title, None, "", status_text, self._tooltip_extras(None))
+            plan.append((STATUS_UID, texts, fg, bg, tip, "UPS" if style != "large" else None, None))
+            return plan
+        groups = [keys[i:i + 2] for i in range(0, len(keys), 2)] if style == "stacked" else [[k] for k in keys]
+        taken = set()
+        for group in groups:
+            gkey = "+".join(group)
+            uid = self._uids.get(gkey) or uid_for(gkey, taken | set(self._uids.values()))
+            self._uids[gkey] = uid
+            taken.add(uid)
+            first = group[0]
+            r = self.ups.by_key.get(first) if self.ups else None
+            label = (r.label or None) if (style == "label" and r is not None) else None
+            texts, r = self._texts(first, s, compact=label is not None)
+            second = None
+            lines = []
+            if r is not None:
+                lines.append((r, self._value_text(r)))
+            if len(group) == 2:
+                second, r2 = self._texts(group[1], s, compact=False)
+                if r2 is not None:
+                    lines.append((r2, self._value_text(r2)))
+            fg, bg = self._colors(first, state, s)
+            if lines:
+                head = "\n".join("%s %s" % (rr.name, vt) for rr, vt in lines[1:])
+                tip = build_tooltip(title, lines[0][0], lines[0][1], status_text,
+                                    ([head] if head else []) + self._tooltip_extras(group))
+            else:
+                tip = "%s\n%s" % (status_text, title)
+            plan.append((uid, texts, fg, bg, tip, label, second))
+        return plan
+
     def _update_icons(self):
         if self._quitting:
             return
-        state = self._state()
         size = self.glyphs.tray_icon_size()
-        title = self.ups.info.title() if self.ups else DISPLAY_NAME
-        status_text = self._status_text()
-        keys = [k for k in self.settings["tray_readings"] if self.ups is None or k in self.ups.by_key]
-        plan = []
-        if not keys:
-            texts = {"online": ["AC"], "battery": ["BAT"], "low": ["LOW"], "alert": ["!"],
-                     "offline": ["--"]}.get(state, ["--"])
-            fg, bg = self._colors("_status", state)
-            tip = build_tooltip(title, None, "", status_text, self._tooltip_extras(None))
-            plan.append((STATUS_UID, tuple(texts), fg, bg, tip))
-        else:
-            taken = set()
-            for key in keys:
-                uid = self._uids.get(key) or uid_for(key, taken | set(self._uids.values()))
-                self._uids[key] = uid
-                taken.add(uid)
-                r = self.ups.by_key.get(key) if self.ups else None
-                snap = self.last_snapshot
-                value = snap.values.get(key) if (snap and r) else None
-                texts = model.tray_texts(r, value, self.settings["temperature_unit"]) if r else ["--"]
-                if snap is not None and not snap.status.ok:
-                    texts = ["--"]
-                fg, bg = self._colors(key, state)
-                name_value = self._value_text(r) if r else "-"
-                tip = build_tooltip(title, r, name_value, status_text, self._tooltip_extras(key)) if r else \
-                    "%s\n%s" % (status_text, title)
-                plan.append((uid, tuple(texts), fg, bg, tip))
+        plan = self.icon_plan(size=size)
         sig = (size, tuple(plan))
         if sig == self._icon_sig:
             return
         self._icon_sig = sig
         icons = []
-        for uid, texts, fg, bg, tip in plan:
+        for uid, texts, fg, bg, tip, label, second in plan:
             try:
-                hicon = self.glyphs.render(list(texts), fg, bg, size)
+                hicon = self.glyphs.render(list(texts), fg, bg, size, label, list(second) if second else None)
             except OSError:
                 log.exception("icon render failed")
                 hicon = None
@@ -610,9 +653,9 @@ def selftest():
         check("hid", False, repr(e))
     try:
         from . import glyphs
-        h = glyphs.render(["235"], "#FFFFFF", None, 16)
+        h = glyphs.render(["235"], "#FFFFFF", None, 24, label="VIN")
         glyphs.destroy(h)
-        check("icon_render", bool(h), "faces: %s" % ", ".join(glyphs._available_faces or []))
+        check("icon_render", bool(h), "value font %s %d, label font %s %d" % (glyphs.value_face() + glyphs.label_face()))
     except Exception as e:
         check("icon_render", False, repr(e))
     try:

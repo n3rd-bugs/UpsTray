@@ -4,6 +4,18 @@ All notable changes to UPS Tray are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semantic versioning](https://semver.org/).
 
+## [1.1.0] - 2026-10-24
+
+### Changed
+
+- Tray icons are easier to read: a bold condensed value with firmer edges,
+  centred to the pixel, and the same digit height on every icon (a unit sign
+  is left out rather than shrinking the digits).
+- New default icon style: a small label above each value (VIN, VOUT, LOAD,
+  BATT, RUN, TEMP ...), so every icon says what it shows.
+- Settings > Display offers three icon styles (value with label, value only,
+  or two readings stacked in one icon) with a live preview of your icons.
+
 ## [1.0.0] - 2026-10-23
 
 First public release.

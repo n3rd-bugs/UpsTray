@@ -33,9 +33,17 @@ The releases are not code-signed, so SmartScreen may warn the first time.
 
 ## Using it
 
-- **Each icon** shows one reading: `231` (V), `75%` (load), `57` (minutes of
-  runtime), `35°` and so on. The tooltip names the reading, the power status
-  and the other readings you chose for tooltips.
+- **Each icon** shows one reading with a small label above it: `VIN 231`,
+  `LOAD 75`, `BATT 99`, `RUN 57` (minutes), `TEMP 35°` and so on. The tooltip
+  names the reading, the power status and the other readings you chose for
+  tooltips.
+- **Icon styles** (Settings > Display, with a live preview): value with a
+  label (default), value only (largest digits), or two readings stacked in
+  one icon (half as many icons). Labels and stacking need icons of 20 px or
+  more, that is display scaling of 125 % or higher; at 100 % the value is
+  shown alone.
+
+  ![Display settings with the icon preview](docs/display.png)
 - **Colors** follow the power state: normal text on mains (white on a dark
   taskbar, black on a light one), **amber on battery**, **red when the
   battery is low**, grey with `--` when the UPS does not answer. You can

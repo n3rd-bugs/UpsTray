@@ -1,10 +1,11 @@
 """Tk windows: Settings (which readings become tray icons, display, notifications)
 and Details (every value the UPS reports, live). Both run on the app thread."""
+import base64
 import json
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
-from . import DISPLAY_NAME, VERSION, model
+from . import DISPLAY_NAME, VERSION, glyphs, model
 
 CHECK_ON, CHECK_OFF = "☑", "☐"
 GROUP_ORDER = ["Power", "Battery", "Settings", "Device", "Other"]
@@ -90,9 +91,10 @@ class SettingsWindow:
         # tray icons tab
         tab = ttk.Frame(nb, padding=pad)
         nb.add(tab, text="Tray icons")
-        ttk.Label(tab, text="Tick Icon for each reading to show as its own notification-area icon, and "
-                            "Tooltip for the readings every tooltip lists. Double-click a row to toggle "
-                            "its icon.", wraplength=int(580 * self.scale), justify="left").pack(anchor="w")
+        ttk.Label(tab, text="Tick Icon for each reading to show in the notification area, and Tooltip for "
+                            "the readings every tooltip lists. Double-click a row to toggle its icon. The "
+                            "Display tab sets the icon style and shows a preview.",
+                  wraplength=int(580 * self.scale), justify="left").pack(anchor="w")
         frame = ttk.Frame(tab)
         frame.pack(fill="both", expand=True, pady=(pad, 0))
         cols = ("icon", "tip", "now", "color")
@@ -134,9 +136,24 @@ class SettingsWindow:
         self.text_color = self.s["text_color"] if self.s["text_color"] != "auto" else "#FFFFFF"
         self.v_status_colors = tk.BooleanVar(value=self.s["status_colors"])
         self.v_badge = tk.BooleanVar(value=self.s["badge"])
+        self.v_style = tk.StringVar(value=self.s["icon_style"])
         row = 0
         grid = ttk.Frame(tab)
         grid.pack(fill="x", anchor="n")
+        ttk.Label(grid, text="Icon style").grid(row=row, column=0, sticky="nw", pady=pad // 2, padx=(0, pad))
+        f = ttk.Frame(grid)
+        f.grid(row=row, column=1, sticky="w", pady=pad // 2)
+        for value, text in (("label", "Value with a small label above it (VIN, LOAD, BATT ...)"),
+                            ("large", "Value only, as large as it fits"),
+                            ("stacked", "Two readings per icon, one above the other (half as many icons)")):
+            ttk.Radiobutton(f, text=text, value=value, variable=self.v_style,
+                            command=self._update_preview).pack(anchor="w")
+        row += 1
+        ttk.Label(grid, text="Preview").grid(row=row, column=0, sticky="nw", pady=pad // 2, padx=(0, pad))
+        self.preview = tk.Frame(grid, borderwidth=1, relief="solid")
+        self.preview.grid(row=row, column=1, sticky="w", pady=pad // 2)
+        self._preview_images = []
+        row += 1
         ttk.Label(grid, text="Update every").grid(row=row, column=0, sticky="w", pady=pad // 2, padx=(0, pad))
         f = ttk.Frame(grid)
         f.grid(row=row, column=1, sticky="w")
@@ -167,11 +184,12 @@ class SettingsWindow:
         self.color_swatch.pack(side="left", padx=(pad // 2, 0))
         row += 1
         ttk.Checkbutton(grid, text="Status colors: amber on battery, red when low, grey when the UPS "
-                                   "does not answer", variable=self.v_status_colors).grid(
+                                   "does not answer", variable=self.v_status_colors,
+                        command=self._update_preview).grid(
             row=row, column=0, columnspan=2, sticky="w", pady=pad // 2)
         row += 1
         ttk.Checkbutton(grid, text="Draw values on a badge (filled with the status color)",
-                        variable=self.v_badge).grid(row=row, column=0, columnspan=2, sticky="w",
+                        variable=self.v_badge, command=self._update_preview).grid(row=row, column=0, columnspan=2, sticky="w",
                                                     pady=pad // 2)
         row += 1
         ttk.Label(tab, text="Windows 11 hides new notification-area icons. To keep the readings visible, "
@@ -180,6 +198,7 @@ class SettingsWindow:
                   wraplength=int(580 * self.scale), justify="left", style="Muted.TLabel").pack(
             anchor="w", pady=(pad * 2, 0))
         self._sync_color_widgets()
+        self.v_temp.trace_add("write", lambda *a: self._update_preview())
 
         # notifications tab
         tab = ttk.Frame(nb, padding=pad)
@@ -263,6 +282,53 @@ class SettingsWindow:
                 self.tree.insert(node, "end", iid="m:" + k, text=k, values=(CHECK_ON, "", "", ""))
         self._update_order_label()
         self._fill_info()
+        self._update_preview()
+
+    def _preview_settings(self):
+        s = dict(self.app.settings)
+        s.update({"icon_style": self.v_style.get(), "badge": bool(self.v_badge.get()),
+                  "status_colors": bool(self.v_status_colors.get()),
+                  "text_color": "auto" if self.v_auto_color.get() else self.text_color,
+                  "reading_colors": dict(self.colors), "temperature_unit": self.v_temp.get()})
+        return s
+
+    def _update_preview(self):
+        """The icons as they will look on this taskbar: real size, then 3x."""
+        if not hasattr(self, "preview"):
+            return
+        s = self._preview_settings()
+        size = glyphs.tray_icon_size()
+        bg = "#EEEEEE" if self.app.taskbar_light() else "#202020"
+        try:
+            plan = self.app.icon_plan(s=s, keys=list(self.icon_keys), size=size)
+        except Exception:
+            return
+        sig = (size, bg, tuple(plan))
+        if sig == getattr(self, "_preview_sig", None):
+            return                                  # nothing changed: no flicker
+        self._preview_sig = sig
+        for w in self.preview.winfo_children():
+            w.destroy()
+        self._preview_images = []
+        self.preview.configure(background=bg)
+        # real size on the first line, magnified on the second; a smaller magnification
+        # when there are many icons, so eight still fit the window
+        for zoom in (1, 3 if len(plan) <= 4 else 2):
+            row = tk.Frame(self.preview, background=bg)
+            row.pack(side="top", anchor="w", padx=int(6 * self.scale), pady=int(3 * self.scale))
+            for uid, texts, fg, bgc, tip, label, second in plan:
+                _, pixels, _ = glyphs.render_pixels(list(texts), fg, bgc, size, label,
+                                                    list(second) if second else None)
+                img = tk.PhotoImage(data=base64.b64encode(glyphs.png_on(size, pixels, bg, zoom)).decode("ascii"))
+                self._preview_images.append(img)
+                tk.Label(row, image=img, background=bg, borderwidth=0).pack(
+                    side="left", padx=int((4 if zoom == 1 else 8) * self.scale))
+        note = ""
+        if s["icon_style"] != "large" and not glyphs.label_fits(size):
+            note = "Icons are %d px at this display scaling: too small for labels or two rows." % size
+        if note:
+            tk.Label(self.preview, text=note, background=bg,
+                     foreground="#000000" if bg == "#EEEEEE" else "#FFFFFF").pack(side="top", anchor="w")
 
     def _row(self, r):
         snap = self.app.last_snapshot
@@ -281,6 +347,7 @@ class SettingsWindow:
         for r in ups.tray_readings():
             if self.tree.exists(r.key):
                 self.tree.item(r.key, values=self._row(r))
+        self._update_preview()
 
     def _fill_info(self):
         ups = self.app.ups
@@ -364,6 +431,7 @@ class SettingsWindow:
             if r:
                 self.tree.item(item, values=self._row(r))
         self._update_order_label()
+        self._update_preview()
 
     def _move(self, delta):
         sel = self.tree.selection()
@@ -376,6 +444,7 @@ class SettingsWindow:
         j = max(0, min(len(self.icon_keys) - 1, i + delta))
         self.icon_keys.insert(j, self.icon_keys.pop(i))
         self._update_order_label()
+        self._update_preview()
 
     def _pick_color(self):
         sel = self.tree.selection()
@@ -389,6 +458,7 @@ class SettingsWindow:
             r = self.app.ups.by_key.get(key)
             if r:
                 self.tree.item(key, values=self._row(r))
+            self._update_preview()
 
     def _reset_color(self):
         sel = self.tree.selection()
@@ -397,6 +467,7 @@ class SettingsWindow:
             r = self.app.ups.by_key.get(sel[0]) if self.app.ups else None
             if r:
                 self.tree.item(sel[0], values=self._row(r))
+            self._update_preview()
 
     def _pick_text_color(self):
         rgb, hexcolor = colorchooser.askcolor(color=self.text_color, parent=self.win, title="Icon text color")
@@ -408,6 +479,7 @@ class SettingsWindow:
     def _sync_color_widgets(self):
         auto = self.v_auto_color.get()
         self.color_swatch.configure(background=self.app.effective_text_color() if auto else self.text_color)
+        self._update_preview()
 
     def _int(self, var, default):
         try:
@@ -427,6 +499,7 @@ class SettingsWindow:
             "text_color": "auto" if self.v_auto_color.get() else self.text_color,
             "status_colors": bool(self.v_status_colors.get()),
             "badge": bool(self.v_badge.get()),
+            "icon_style": self.v_style.get(),
             "notify_on_battery": bool(self.v_n_batt.get()),
             "notify_after_seconds": self._int(self.v_n_after, s["notify_after_seconds"]),
             "notify_restored": bool(self.v_n_rest.get()),

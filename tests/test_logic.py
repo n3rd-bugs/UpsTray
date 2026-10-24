@@ -329,6 +329,14 @@ class AppHelpers(unittest.TestCase):
         self.assertNotEqual(app.uid_for("load", {a}), a)
         self.assertNotEqual(a, app.STATUS_UID)
 
+    def test_selftest_passes_without_hardware_assumptions(self):
+        from upstray import app
+        ok, data = app.selftest()
+        self.assertTrue(ok, data)
+        self.assertEqual(data["version"], VERSION)
+        for name in ("python", "tcl_tk", "hid", "icon_render", "settings", "ups"):
+            self.assertIn(name, data["checks"])
+
     def test_version_format(self):
         self.assertRegex(VERSION, r"^\d+\.\d+\.\d+$")
 
@@ -598,6 +606,118 @@ class Notifications(unittest.TestCase):
                 self.assertEqual(a.tray.balloons[-1], "Mains power restored")
                 # icons: one per chosen reading, never more than chosen
                 self.assertEqual(len(a.tray.icons), len(a.settings["tray_readings"]))
+                a.root.destroy()
+            finally:
+                if old is None:
+                    os.environ.pop("LOCALAPPDATA", None)
+                else:
+                    os.environ["LOCALAPPDATA"] = old
+
+
+def ink_rows(px, size):
+    """Indexes of icon rows that carry ink."""
+    return [y for y in range(size) if any(px[(y * size + x) * 4 + 3] for x in range(size))]
+
+
+def bands(rows):
+    """Consecutive runs of inked rows: [(first, last), ...]."""
+    out = []
+    for y in rows:
+        if out and y == out[-1][1] + 1:
+            out[-1] = (out[-1][0], y)
+        else:
+            out.append((y, y))
+    return out
+
+
+class IconStyles(unittest.TestCase):
+    def setUp(self):
+        from upstray import glyphs
+        self.g = glyphs
+
+    def test_label_sits_above_the_value(self):
+        size = 24
+        _, px, text = self.g.render_pixels(["239"], "#000000", None, size, label="VIN")
+        b = bands(ink_rows(px, size))
+        self.assertEqual(len(b), 2, b)                     # label band, gap, value band
+        label_band, value_band = b
+        self.assertEqual(label_band[0], 0)                 # label starts at the top
+        self.assertGreater(value_band[0], label_band[1] + 1)
+        self.assertGreaterEqual(value_band[1] - value_band[0] + 1, 10)   # value stays big
+
+    def test_badge_keeps_its_label_at_20px(self):
+        # review finding: the badge's 18 px inner area must not drop the label the app planned for
+        _, px, _ = self.g.render_pixels(["41"], "#FFFFFF", "#2D6A31", 20, label="LOAD")
+        coverage = [y for y in range(20)
+                    if any(px[(y * 20 + x) * 4 + 1] > 200 for x in range(2, 18))]   # light text pixels
+        self.assertEqual(len(bands(coverage)), 2, bands(coverage))
+
+    def test_no_label_on_small_icons(self):
+        _, px, _ = self.g.render_pixels(["239"], "#000000", None, 16, label="VIN")
+        self.assertEqual(len(bands(ink_rows(px, 16))), 1)
+
+    def test_values_share_one_digit_height(self):
+        heights = set()
+        for texts in (["239"], ["41%", "41"], ["57"], ["100%", "100"]):
+            _, px, _ = self.g.render_pixels(texts, "#000000", None, 24)
+            rows = ink_rows(px, 24)
+            heights.add(rows[-1] - rows[0] + 1)
+        self.assertLessEqual(max(heights) - min(heights), 1, heights)
+
+    def test_stacked_draws_two_lines(self):
+        size = 24
+        _, px, _ = self.g.render_pixels(["239"], "#000000", None, size, second=["41%", "41"])
+        b = bands(ink_rows(px, size))
+        self.assertEqual(len(b), 2, b)
+        top_h, bottom_h = b[0][1] - b[0][0], b[1][1] - b[1][0]
+        self.assertLessEqual(abs(top_h - bottom_h), 1)      # same digit height on both lines
+
+    def test_preview_png(self):
+        size, px, _ = self.g.render_pixels(["239"], "#000000", None, 24, label="VIN")
+        png = self.g.png_on(size, px, "#EEEEEE", zoom=3)
+        self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_compact_texts_drop_the_percent_sign(self):
+        ups, _ = make_ups()
+        self.assertEqual(model.tray_texts(ups.by_key["load"], 41.2, compact=True), ["41"])
+        self.assertEqual(model.tray_texts(ups.by_key["load"], 41.2), ["41%", "41"])
+        self.assertEqual(ups.by_key["input_voltage"].label, "VIN")
+        self.assertEqual(ups.by_key["load"].label, "LOAD")
+        other = next(r for r in ups.readings if r.group == "Other")
+        self.assertEqual(other.label, "")
+
+    def test_style_setting(self):
+        self.assertEqual(settings.normalize({})["icon_style"], "label")
+        self.assertEqual(settings.normalize({"icon_style": "stacked"})["icon_style"], "stacked")
+        self.assertEqual(settings.normalize({"icon_style": "fancy"})["icon_style"], "label")
+
+    def test_icon_plan_per_style(self):
+        tk_or_skip(self)
+        from upstray import app as appmod
+        with tempfile.TemporaryDirectory() as d:
+            old = os.environ.get("LOCALAPPDATA")
+            os.environ["LOCALAPPDATA"] = d
+            try:
+                a = appmod.App()
+                a.tray = FakeTray()
+                a.ups, _ = make_ups()
+                a.last_snapshot = a.ups.snapshot()
+                keys = ["input_voltage", "load", "charge"]
+                s = dict(a.settings, icon_style="label")
+                plan = a.icon_plan(s=s, keys=keys, size=24)
+                self.assertEqual([p[5] for p in plan], ["VIN", "LOAD", "BATT"])
+                self.assertEqual(plan[1][1], (str(round(a.last_snapshot.values["load"])),))   # no % with a label
+                s["icon_style"] = "large"
+                plan = a.icon_plan(s=s, keys=keys, size=24)
+                self.assertEqual([p[5] for p in plan], [None, None, None])
+                s["icon_style"] = "stacked"
+                plan = a.icon_plan(s=s, keys=keys, size=24)
+                self.assertEqual(len(plan), 2)                       # pairs, plus one single
+                self.assertIsNotNone(plan[0][6])
+                self.assertIsNone(plan[1][6])
+                self.assertIn("Load", plan[0][4])                    # tooltip names both readings
+                plan = a.icon_plan(s=s, keys=keys, size=16)          # too small for two rows
+                self.assertEqual(len(plan), 3)
                 a.root.destroy()
             finally:
                 if old is None:
