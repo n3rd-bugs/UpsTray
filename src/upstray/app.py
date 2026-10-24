@@ -347,6 +347,12 @@ class App:
     def taskbar_light(self):
         return taskbar_is_light()
 
+    def fonts(self, s=None):
+        """The renderer's Fonts for these settings (missing families fall back to the default)."""
+        s = s or self.settings
+        return self.glyphs.make_fonts(s.get("value_font", ""), s.get("value_weight", 0), s.get("label_font", ""),
+                                      s.get("label_weight", 0), s.get("value_size", 100), s.get("label_size", 33))
+
     def effective_text_color(self, s=None):
         tc = (s or self.settings)["text_color"]
         if tc != "auto":
@@ -464,14 +470,16 @@ class App:
             return
         size = self.glyphs.tray_icon_size()
         plan = self.icon_plan(size=size)
-        sig = (size, tuple(plan))
+        fonts = self.fonts()
+        sig = (size, fonts, tuple(plan))
         if sig == self._icon_sig:
             return
         self._icon_sig = sig
         icons = []
         for uid, texts, fg, bg, tip, label, second in plan:
             try:
-                hicon = self.glyphs.render(list(texts), fg, bg, size, label, list(second) if second else None)
+                hicon = self.glyphs.render(list(texts), fg, bg, size, label, list(second) if second else None,
+                                           fonts)
             except OSError:
                 log.exception("icon render failed")
                 hicon = None

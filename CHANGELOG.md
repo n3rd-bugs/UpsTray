@@ -4,6 +4,23 @@ All notable changes to UPS Tray are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semantic versioning](https://semver.org/).
 
+## [1.2.0] - 2026-10-24
+
+### Added
+
+- Font settings in Settings > Display, for the numbers and for the labels:
+  any installed font family (type to filter the list), weight (Regular,
+  SemiBold, Bold, Black) and size, all shown in the live preview.
+  **Default fonts** goes back to Bahnschrift Condensed and Segoe UI
+  Semibold. A font that is no longer installed falls back to the default.
+
+### Changed
+
+- All labels share one height (the height "VOUT" fits at), so a short
+  label such as VIN is no taller than LOAD.
+- The Settings window keeps Save and Cancel visible however tall a tab
+  gets, and opens a little taller.
+
 ## [1.1.0] - 2026-10-24
 
 ### Changed

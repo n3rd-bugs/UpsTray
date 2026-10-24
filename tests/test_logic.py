@@ -726,6 +726,54 @@ class IconStyles(unittest.TestCase):
                     os.environ["LOCALAPPDATA"] = old
 
 
+class Fonts(unittest.TestCase):
+    def setUp(self):
+        from upstray import glyphs
+        self.g = glyphs
+
+    def test_settings_validation(self):
+        s = settings.normalize({"value_font": " Consolas ", "label_font": "@Vertical", "value_weight": 700,
+                                "label_weight": 500, "value_size": 10, "label_size": 99})
+        self.assertEqual(s["value_font"], "Consolas")
+        self.assertEqual(s["label_font"], "")                 # vertical (@) families are not offered
+        self.assertEqual(s["value_weight"], 700)
+        self.assertEqual(s["label_weight"], 0)                 # not one of the offered weights
+        self.assertEqual((s["value_size"], s["label_size"]), (40, 50))
+        self.assertEqual(settings.normalize({"value_font": "x" * 65})["value_font"], "")
+        self.assertEqual(settings.normalize({"value_weight": True})["value_weight"], 0)
+
+    def test_defaults_and_missing_fonts(self):
+        d = self.g.default_fonts()
+        self.assertEqual((d.value_face, d.label_face), (self.g.value_face()[0], self.g.label_face()[0]))
+        f = self.g.make_fonts("No Such Font 123", 0, "", 0)
+        self.assertEqual(f.value_face, d.value_face)           # missing family -> default
+        f = self.g.make_fonts("Arial", 400, "Arial", 700, 80, 40)
+        self.assertEqual((f.value_face, f.value_weight, f.label_weight), ("Arial", 400, 700))
+        self.assertAlmostEqual(f.value_scale, 0.8)
+        self.assertAlmostEqual(f.label_fraction, 0.4)
+
+    def test_value_size_shrinks_digits(self):
+        def height(fonts):
+            _, px, _ = self.g.render_pixels(["239"], "#000000", None, 24, fonts=fonts)
+            rows = ink_rows(px, 24)
+            return rows[-1] - rows[0] + 1
+        self.assertLess(height(self.g.make_fonts(value_size=60)), height(self.g.make_fonts()))
+
+    def test_labels_share_one_height(self):
+        fonts = self.g.make_fonts(label_size=45)
+        heights = []
+        for label in ("VIN", "LOAD", "RUN"):
+            _, px, _ = self.g.render_pixels(["57"], "#000000", None, 32, label=label, fonts=fonts)
+            band = bands(ink_rows(px, 32))[0]
+            heights.append(band[1] - band[0])
+        self.assertLessEqual(max(heights) - min(heights), 1, heights)
+
+    def test_custom_font_changes_the_pixels(self):
+        a = self.g.render_pixels(["239"], "#000000", None, 24, fonts=self.g.default_fonts())[1]
+        b = self.g.render_pixels(["239"], "#000000", None, 24, fonts=self.g.make_fonts("Consolas", 700))[1]
+        self.assertNotEqual(a, b)
+
+
 class UiSmoke(unittest.TestCase):
     """Builds the Settings and Details windows from the recording (no tray, no poller)."""
 
@@ -749,9 +797,31 @@ class UiSmoke(unittest.TestCase):
                 text = a.details_window.text_report()
                 self.assertIn("Input voltage", text)
                 self.assertIn("Mains present: yes", text)
+                # review finding: Save must stay on screen even when the content is taller
+                win = a.settings_window.win
+                win.geometry("%dx%d" % (win.winfo_width(), max(300, win.winfo_height() // 2)))
+                a.root.update()
+                buttons = []
+
+                def walk(w):
+                    for c in w.winfo_children():
+                        if c.winfo_class() == "TButton" and c.cget("text") == "Save":
+                            buttons.append(c)
+                        walk(c)
+                walk(win)
+                save = buttons[0]
+                self.assertTrue(save.winfo_ismapped())
+                self.assertLessEqual(save.winfo_rooty() + save.winfo_height(), win.winfo_rooty() + win.winfo_height())
                 a.settings_window._toggle("output_voltage", "icon")
+                rows = a.settings_window.font_rows
+                rows["value"][0].set("arial")                 # typed in lower case
+                rows["value"][1].set("Regular")
+                rows["label"][2].set(40)
                 a.settings_window.save()
                 self.assertIn("output_voltage", a.settings["tray_readings"])
+                self.assertEqual((a.settings["value_font"], a.settings["value_weight"]), ("Arial", 400))
+                self.assertEqual(a.settings["label_size"], 40)
+                self.assertEqual(a.fonts().value_face, "Arial")
                 self.assertTrue(os.path.exists(os.path.join(d, "UpsTray", "settings.json")))
                 a.details_window.close()
                 a.root.destroy()

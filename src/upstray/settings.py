@@ -17,6 +17,12 @@ DEFAULTS = {
     "status_colors": True,            # amber text on battery, red when low, grey when offline
     "badge": False,                   # draw the value on a rounded badge instead of bare text
     "icon_style": "label",            # label (caption + value), large (value only), stacked (two per icon)
+    "value_font": "",                 # font family for the values; "" = default (Bahnschrift Condensed)
+    "value_weight": 0,                # 0 = the default font's weight, else 400/600/700/900
+    "value_size": 100,                # % of the largest size that fits
+    "label_font": "",                 # font family for the labels; "" = default (Segoe UI Semibold)
+    "label_weight": 0,
+    "label_size": 33,                 # label row height, % of the icon
     "nominal_watts": 0,               # rated real power, for 'Load power' when the UPS has none
     "low_charge_percent": 20,         # 'low' below this charge (besides the UPS's own warnings)
     "notify_on_battery": False,
@@ -30,6 +36,17 @@ DEFAULTS = {
 
 _COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 ICON_STYLES = ("label", "large", "stacked")
+FONT_WEIGHTS = (0, 400, 600, 700, 900)
+
+
+def _font_name(v):
+    """A font family name as typed or picked: printable, at most 64 characters, else ''."""
+    if not isinstance(v, str):
+        return ""
+    v = v.strip()
+    if len(v) > 64 or any(ord(c) < 32 for c in v) or v.startswith("@"):
+        return ""
+    return v
 
 
 def app_dir():
@@ -72,6 +89,12 @@ def normalize(raw):
     s["temperature_unit"] = raw.get("temperature_unit") if raw.get("temperature_unit") in ("C", "F") else "C"
     s["runtime_style"] = raw.get("runtime_style") if raw.get("runtime_style") in ("minutes", "hm") else "minutes"
     s["icon_style"] = raw.get("icon_style") if raw.get("icon_style") in ICON_STYLES else "label"
+    for key in ("value_font", "label_font"):
+        s[key] = _font_name(raw.get(key))
+    for key in ("value_weight", "label_weight"):
+        s[key] = raw.get(key) if raw.get(key) in FONT_WEIGHTS and not isinstance(raw.get(key), bool) else 0
+    s["value_size"] = _int(raw.get("value_size"), DEFAULTS["value_size"], 40, 100)
+    s["label_size"] = _int(raw.get("label_size"), DEFAULTS["label_size"], 20, 50)
     tc = raw.get("text_color")
     s["text_color"] = tc if tc == "auto" or (isinstance(tc, str) and _COLOR.match(tc)) else "auto"
     colors = raw.get("reading_colors")

@@ -3,7 +3,7 @@ and Details (every value the UPS reports, live). Both run on the app thread."""
 import base64
 import json
 import tkinter as tk
-from tkinter import colorchooser, filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, font as tkfont, messagebox, ttk
 
 from . import DISPLAY_NAME, VERSION, glyphs, model
 
@@ -75,7 +75,7 @@ class SettingsWindow:
         self.tip_keys = list(self.s["tooltip_readings"])
         self.colors = dict(self.s["reading_colors"])
         self._build()
-        _place(self.win, 640, 560, self.scale)
+        _place(self.win, 660, 650, self.scale)
         self.reload()
 
     # -- layout ---------------------------------------------------------------------
@@ -85,6 +85,9 @@ class SettingsWindow:
         outer.pack(fill="both", expand=True)
         self.device = ttk.Label(outer, text="", style="Muted.TLabel")
         self.device.pack(anchor="w", pady=(0, pad))
+        # packed before the notebook so that Save/Cancel never get squeezed out
+        bottom = ttk.Frame(outer)
+        bottom.pack(side="bottom", fill="x", pady=(pad, 0))
         nb = ttk.Notebook(outer)
         nb.pack(fill="both", expand=True)
 
@@ -125,6 +128,11 @@ class SettingsWindow:
         ttk.Button(btns, text="Default color", command=self._reset_color).pack(side="left", padx=(pad, 0))
         self.order_label = ttk.Label(btns, text="", style="Muted.TLabel")
         self.order_label.pack(side="right")
+        ttk.Label(tab, text="Windows 11 hides new notification-area icons: to keep these on the taskbar, turn "
+                            "on the UPS Tray entries in Settings > Personalization > Taskbar > Other system "
+                            "tray icons, or drag them out of the overflow.",
+                  wraplength=int(600 * self.scale), justify="left", style="Muted.TLabel").pack(
+            anchor="w", pady=(pad, 0))
 
         # display tab
         tab = ttk.Frame(nb, padding=pad)
@@ -153,6 +161,38 @@ class SettingsWindow:
         self.preview = tk.Frame(grid, borderwidth=1, relief="solid")
         self.preview.grid(row=row, column=1, sticky="w", pady=pad // 2)
         self._preview_images = []
+        row += 1
+        # fonts: family (type to filter), weight, size; every change shows in the preview
+        self._families = self._font_families()
+        self.font_rows = {}
+        for which, title, size_text, lo, hi in (("value", "Numbers font", "%", 40, 100),
+                                                ("label", "Labels font", "% of the icon", 20, 50)):
+            ttk.Label(grid, text=title).grid(row=row, column=0, sticky="w", pady=pad // 2, padx=(0, pad))
+            f = ttk.Frame(grid)
+            f.grid(row=row, column=1, sticky="w", pady=pad // 2)
+            default = self._default_family(which)
+            v_family = tk.StringVar(value=self.s[which + "_font"] or default)
+            v_weight = tk.StringVar(value=self._weight_name(self.s[which + "_weight"]))
+            v_size = tk.IntVar(value=self.s[which + "_size"])
+            cb = ttk.Combobox(f, textvariable=v_family, width=30, values=[default] + self._families)
+            cb.pack(side="left")
+            cb.bind("<<ComboboxSelected>>", lambda e: self._update_preview())
+            cb.bind("<KeyRelease>", lambda e, c=cb, w=which: self._filter_families(c, w))
+            cb.bind("<FocusOut>", lambda e: self._update_preview())
+            wb = ttk.Combobox(f, textvariable=v_weight, width=9, state="readonly",
+                              values=["Default", "Regular", "SemiBold", "Bold", "Black"])
+            wb.pack(side="left", padx=(pad // 2, 0))
+            wb.bind("<<ComboboxSelected>>", lambda e: self._update_preview())
+            ttk.Label(f, text="Size").pack(side="left", padx=(pad, pad // 2))
+            ttk.Spinbox(f, from_=lo, to=hi, increment=5 if which == "value" else 1, width=4,
+                        textvariable=v_size, command=self._update_preview).pack(side="left")
+            ttk.Label(f, text=size_text).pack(side="left", padx=(pad // 2, 0))
+            v_size.trace_add("write", lambda *a: self._update_preview())
+            self.font_rows[which] = (v_family, v_weight, v_size, default)
+            row += 1
+        f = ttk.Frame(grid)
+        f.grid(row=row, column=1, sticky="w", pady=(0, pad // 2))
+        ttk.Button(f, text="Default fonts", command=self._reset_fonts).pack(side="left")
         row += 1
         ttk.Label(grid, text="Update every").grid(row=row, column=0, sticky="w", pady=pad // 2, padx=(0, pad))
         f = ttk.Frame(grid)
@@ -192,11 +232,6 @@ class SettingsWindow:
                         variable=self.v_badge, command=self._update_preview).grid(row=row, column=0, columnspan=2, sticky="w",
                                                     pady=pad // 2)
         row += 1
-        ttk.Label(tab, text="Windows 11 hides new notification-area icons. To keep the readings visible, "
-                            "open Settings > Personalization > Taskbar > Other system tray icons and turn "
-                            "on the UPS Tray entries, or drag the icons from the overflow onto the taskbar.",
-                  wraplength=int(580 * self.scale), justify="left", style="Muted.TLabel").pack(
-            anchor="w", pady=(pad * 2, 0))
         self._sync_color_widgets()
         self.v_temp.trace_add("write", lambda *a: self._update_preview())
 
@@ -247,9 +282,7 @@ class SettingsWindow:
                           "reading when the UPS does not report watts.", wraplength=int(420 * self.scale),
                   justify="left").pack(side="left", padx=(pad // 2, 0))
 
-        # bottom
-        bottom = ttk.Frame(outer)
-        bottom.pack(fill="x", pady=(pad, 0))
+        # bottom (frame packed above)
         self.v_autostart = tk.BooleanVar(value=self.app.autostart_enabled())
         cb = ttk.Checkbutton(bottom, text="Start with Windows", variable=self.v_autostart)
         cb.pack(side="left")
@@ -284,8 +317,67 @@ class SettingsWindow:
         self._fill_info()
         self._update_preview()
 
+    # -- fonts ---------------------------------------------------------------------
+    def _font_families(self):
+        try:
+            names = tkfont.families(self.win)
+        except tk.TclError:
+            names = ()
+        return sorted({n for n in names if n and not n.startswith("@")}, key=str.lower)
+
+    def _default_family(self, which):
+        face = glyphs.value_face()[0] if which == "value" else glyphs.label_face()[0]
+        return "Default (%s)" % face
+
+    @staticmethod
+    def _weight_name(weight):
+        return {400: "Regular", 600: "SemiBold", 700: "Bold", 900: "Black"}.get(weight, "Default")
+
+    def _filter_families(self, combo, which):
+        """Typing filters the list to the families that contain the text."""
+        text = combo.get().strip().lower()
+        default = self._default_family(which)
+        matches = [f for f in self._families if text in f.lower()] if text else self._families
+        combo.configure(values=[default] + matches)
+        if self._family_value(which):
+            self._update_preview()
+
+    def _family_value(self, which):
+        """The chosen family as stored: '' for the default, the installed spelling otherwise."""
+        v_family, _, _, default = self.font_rows[which]
+        text = v_family.get().strip()
+        if not text or text == default:
+            return ""
+        for f in self._families:
+            if f.lower() == text.lower():
+                return f
+        return ""
+
+    def _font_values(self):
+        out = {}
+        for which in ("value", "label"):
+            _, v_weight, v_size, _ = self.font_rows[which]
+            out[which + "_font"] = self._family_value(which)
+            out[which + "_weight"] = {"Regular": 400, "SemiBold": 600, "Bold": 700, "Black": 900}.get(
+                v_weight.get(), 0)
+            try:
+                out[which + "_size"] = int(v_size.get())
+            except (tk.TclError, ValueError):
+                out[which + "_size"] = self.app.settings[which + "_size"]
+        return out
+
+    def _reset_fonts(self):
+        for which, size in (("value", 100), ("label", 33)):
+            v_family, v_weight, v_size, default = self.font_rows[which]
+            v_family.set(default)
+            v_weight.set("Default")
+            v_size.set(size)
+        self._update_preview()
+
     def _preview_settings(self):
         s = dict(self.app.settings)
+        if hasattr(self, "font_rows"):
+            s.update(self._font_values())
         s.update({"icon_style": self.v_style.get(), "badge": bool(self.v_badge.get()),
                   "status_colors": bool(self.v_status_colors.get()),
                   "text_color": "auto" if self.v_auto_color.get() else self.text_color,
@@ -303,7 +395,8 @@ class SettingsWindow:
             plan = self.app.icon_plan(s=s, keys=list(self.icon_keys), size=size)
         except Exception:
             return
-        sig = (size, bg, tuple(plan))
+        fonts = self.app.fonts(s)
+        sig = (size, bg, fonts, tuple(plan))
         if sig == getattr(self, "_preview_sig", None):
             return                                  # nothing changed: no flicker
         self._preview_sig = sig
@@ -318,7 +411,7 @@ class SettingsWindow:
             row.pack(side="top", anchor="w", padx=int(6 * self.scale), pady=int(3 * self.scale))
             for uid, texts, fg, bgc, tip, label, second in plan:
                 _, pixels, _ = glyphs.render_pixels(list(texts), fg, bgc, size, label,
-                                                    list(second) if second else None)
+                                                    list(second) if second else None, fonts)
                 img = tk.PhotoImage(data=base64.b64encode(glyphs.png_on(size, pixels, bg, zoom)).decode("ascii"))
                 self._preview_images.append(img)
                 tk.Label(row, image=img, background=bg, borderwidth=0).pack(
@@ -500,6 +593,7 @@ class SettingsWindow:
             "status_colors": bool(self.v_status_colors.get()),
             "badge": bool(self.v_badge.get()),
             "icon_style": self.v_style.get(),
+            **self._font_values(),
             "notify_on_battery": bool(self.v_n_batt.get()),
             "notify_after_seconds": self._int(self.v_n_after, s["notify_after_seconds"]),
             "notify_restored": bool(self.v_n_rest.get()),

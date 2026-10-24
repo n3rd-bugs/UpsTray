@@ -12,6 +12,7 @@ import ctypes
 import ctypes.wintypes as wt
 import struct
 import zlib
+from typing import NamedTuple
 
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -38,6 +39,7 @@ LABEL_FACES = (("Segoe UI Semibold", 600), ("Segoe UI", 600), ("Arial", 700))
 LABEL_ALPHA = 1.0        # full strength: anything lighter is unreadable at this size
 LABEL_FRACTION = 0.33    # label row height as a share of the icon
 VALUE_REFERENCE = "888"  # every value gets the digit height this text fits at (consistent icons)
+LABEL_REFERENCE = "VOUT" # and every label the height this one fits at (VIN as tall as LOAD)
 GAMMA = 0.75             # alpha = coverage ** GAMMA: firmer antialiased edges
 MIN_LABEL_SIZE = 20      # icons smaller than this get no label (it would be unreadable)
 
@@ -124,11 +126,68 @@ def _pick(candidates):
 
 
 def value_face():
+    """Default (face, weight) for values."""
     return _pick(VALUE_FACES)
 
 
 def label_face():
+    """Default (face, weight) for labels."""
     return _pick(LABEL_FACES)
+
+
+_available = {}
+
+
+def available(face):
+    """True if GDI has this font family (it silently substitutes missing ones)."""
+    key = face.lower()
+    if key not in _available:
+        _available[key] = _has_face(face)
+    return _available[key]
+
+
+def _has_face(face):
+    hdc = gdi32.CreateCompatibleDC(None)
+    buf = ctypes.create_unicode_buffer(64)
+    try:
+        font = _font(face, 400, 12)
+        if not font:
+            return False
+        old = gdi32.SelectObject(hdc, font)
+        gdi32.GetTextFaceW(hdc, 64, buf)
+        gdi32.SelectObject(hdc, old)
+        gdi32.DeleteObject(font)
+        return buf.value.lower() == face.lower()
+    finally:
+        gdi32.DeleteDC(hdc)
+
+
+class Fonts(NamedTuple):
+    """What the icons are drawn with. Sizes are relative: value_scale shrinks the value
+    below the largest size that fits; label_fraction is the label row's share of the icon."""
+    value_face: str
+    value_weight: int
+    label_face: str
+    label_weight: int
+    value_scale: float = 1.0
+    label_fraction: float = LABEL_FRACTION
+
+
+WEIGHTS = {"Regular": 400, "SemiBold": 600, "Bold": 700, "Black": 900}
+
+
+def make_fonts(value_face="", value_weight=0, label_face="", label_weight=0, value_size=100, label_size=33):
+    """Fonts from user settings: an empty or missing family means the default one, a weight
+    of 0 the default weight; sizes are percentages."""
+    dv, dl = globals()["value_face"](), globals()["label_face"]()
+    vf = value_face if value_face and available(value_face) else dv[0]
+    lf = label_face if label_face and available(label_face) else dl[0]
+    return Fonts(vf, int(value_weight) or dv[1], lf, int(label_weight) or dl[1],
+                 max(0.4, min(1.0, value_size / 100.0)), max(0.2, min(0.5, label_size / 100.0)))
+
+
+def default_fonts():
+    return make_fonts()
 
 
 _ink_cache = {}
@@ -213,10 +272,10 @@ def fit(text, face, weight, max_w, max_h):
     return best
 
 
-def _best_value(texts, max_w, max_h, min_ratio=0.85):
+def _best_value(texts, max_w, max_h, fonts, min_ratio=0.85):
     """(text, px, w, h): the first candidate whose digits reach min_ratio of the room,
     else the candidate with the tallest digits."""
-    face, weight = value_face()
+    face, weight = fonts.value_face, fonts.value_weight
     fallback = None
     for text in texts:
         f = fit(text, face, weight, max_w, max_h)
@@ -243,21 +302,23 @@ def _blit(canvas, size, rows, x, y, alpha=1.0):
                     line[xx] = v
 
 
-def layout(texts, size, label=None, second=None):
+def layout(texts, size, label=None, second=None, fonts=None):
     """Coverage canvas (rows of 0..255) and the value text used.
 
     label: small caption above the value; the caller decides whether the icon is big
     enough (label_fits), so the drawing and the texts chosen for it always agree.
     second: candidate texts for a second value under the first (two readings per icon).
+    fonts: a Fonts spec (default_fonts() when None).
     """
+    fonts = fonts or default_fonts()
     canvas = [bytearray(size) for _ in range(size)]
-    face, weight = value_face()
+    face, weight = fonts.value_face, fonts.value_weight
     texts = list(texts) or ["--"]
     if second:
         gap = max(1, size // 12)
-        line_h = (size - gap) // 2
-        a = _best_value(texts, size, line_h)
-        b = _best_value(list(second), size, line_h)
+        line_h = max(5, int((size - gap) // 2 * fonts.value_scale))
+        a = _best_value(texts, size, line_h, fonts)
+        b = _best_value(list(second), size, line_h, fonts)
         if not a or not b:
             return canvas, texts[0]
         px = min(a[1], b[1])                       # same digit height on both lines
@@ -268,15 +329,18 @@ def layout(texts, size, label=None, second=None):
         return canvas, a[0]
     top = 0
     if label:
-        lface, lweight = label_face()
-        f = fit(label, lface, lweight, size, max(5, round(size * LABEL_FRACTION)))
+        lface, lweight = fonts.label_face, fonts.label_weight
+        row_h = max(5, round(size * fonts.label_fraction))
+        lref = fit(LABEL_REFERENCE, lface, lweight, size, row_h)
+        f = fit(label, lface, lweight, size, min(row_h, lref[2]) if lref else row_h)
         if f:
             _, lw, lh = f
             _blit(canvas, size, ink(label, lface, lweight, f[0])[2], (size - lw) // 2, 0, LABEL_ALPHA)
             top = lh + max(1, size // 12)
     room = size - top
     ref = fit(VALUE_REFERENCE, face, weight, size, room)
-    best = _best_value(texts, size, min(room, ref[2]) if ref else room)
+    cap = min(room, ref[2]) if ref else room
+    best = _best_value(texts, size, max(5, int(cap * fonts.value_scale)), fonts)
     if not best:
         return canvas, texts[0]
     text, px, w, h = best
@@ -334,12 +398,12 @@ def label_fits(size):
     return size >= MIN_LABEL_SIZE
 
 
-def render_pixels(texts, color="#FFFFFF", background=None, size=None, label=None, second=None):
+def render_pixels(texts, color="#FFFFFF", background=None, size=None, label=None, second=None, fonts=None):
     """(size, premultiplied BGRA pixels, value text used)."""
     size = size or tray_icon_size()
     if not label_fits(size):
         label = None
-    canvas, text = layout(texts, size - (2 if background else 0), label, second)
+    canvas, text = layout(texts, size - (2 if background else 0), label, second, fonts)
     if background:
         inner = size - 2
         padded = [bytearray(size) for _ in range(size)]
@@ -378,9 +442,9 @@ def make_icon(size, pixels):
             gdi32.DeleteDC(hdc)
 
 
-def render(texts, color="#FFFFFF", background=None, size=None, label=None, second=None):
+def render(texts, color="#FFFFFF", background=None, size=None, label=None, second=None, fonts=None):
     """HICON for one tray icon; the caller must DestroyIcon it."""
-    size, pixels, _ = render_pixels(texts, color, background, size, label, second)
+    size, pixels, _ = render_pixels(texts, color, background, size, label, second, fonts)
     return make_icon(size, pixels)
 
 

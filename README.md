@@ -42,6 +42,10 @@ The releases are not code-signed, so SmartScreen may warn the first time.
   one icon (half as many icons). Labels and stacking need icons of 20 px or
   more, that is display scaling of 125 % or higher; at 100 % the value is
   shown alone.
+- **Fonts** (Settings > Display): pick the font family, weight and size for
+  the numbers and for the labels; type part of a name to filter the list.
+  The preview shows the result before you save, and **Default fonts** goes
+  back to Bahnschrift Condensed (numbers) and Segoe UI Semibold (labels).
 
   ![Display settings with the icon preview](docs/display.png)
 - **Colors** follow the power state: normal text on mains (white on a dark
