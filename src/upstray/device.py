@@ -1,8 +1,9 @@
-"""Find the UPS, describe it once, and read snapshots of the values that are needed.
+"""Find the UPS, describe it once, read snapshots of the values that are needed, and
+start or abort a battery test when the user asks for one.
 
-The Ups class talks to a backend with five calls (describe, read_reports, value,
-buttons, close). HidBackend implements them with hid.dll; the unit tests use a
-recorded backend, so everything above the backend is tested without hardware.
+The Ups class talks to a backend with six calls (describe, read_reports, value,
+buttons, write_test, close). HidBackend implements them with hid.dll; the unit tests
+use a recorded backend, so everything above the backend is tested without hardware.
 """
 import logging
 import threading
@@ -18,6 +19,14 @@ APC_VID = 0x051D
 
 # Vendor string usages worth showing (APC page): usage -> label
 APC_STRINGS = {0x0042: "Firmware", 0x0079: "USB firmware"}
+
+# Test usage (0x84:0x58): the values written to it, and what it reads while running / idle
+TEST_CLEAR, QUICK_TEST, CALIBRATION, TEST_ABORT = 0, 1, 2, 3
+TEST_RUNNING, NO_TEST = 5, 6
+
+
+class TestRefused(Exception):
+    """A battery test was not started or aborted; the message tells the user why."""
 
 
 @dataclass
@@ -114,6 +123,13 @@ class HidBackend:
     def buttons(self, report, page, link):
         return self.dev.usages_on(report, page, link)
 
+    def write_test(self, f, command):
+        self.dev.write_test(f.report_id, f.link, command)
+
+    @property
+    def handle(self):
+        return self.dev.handle
+
     def close(self):
         self.dev.close()
 
@@ -157,6 +173,7 @@ class Ups:
         self.backend = backend
         self._lock = threading.RLock()
         self.closed = False
+        self._closing = False             # set by close() without the lock: stops a test start
         try:
             self.nodes, self.fields, self.info = backend.describe()
             self.capacity_mode = self._read_capacity_mode()
@@ -167,6 +184,29 @@ class Ups:
         self.readings = model.build_readings(self.fields, nominal_watts, self.capacity_mode)
         self.by_key = {r.key: r for r in self.readings}
         self._status = self._status_collection()
+        self.test_field = self._writable_test_field()
+
+    def _writable_test_field(self):
+        """The Test field behind the 'self_test' reading when UPS Tray may write it: alone in
+        its feature report, so that a write cannot change anything else. None otherwise."""
+        r = self.by_key.get("self_test")
+        f = r.field if r else None
+        if f is None or f.kind != "value":
+            return None
+        if any((g.page, g.usage) != (f.page, f.usage) for g in self.fields if g.report_id == f.report_id):
+            return None
+        return f
+
+    @property
+    def handle(self):
+        """The open device handle (for device-removal notices), or None."""
+        return None if self.closed else getattr(self.backend, "handle", None)
+
+    def identity(self):
+        """Which UPS this is, to tie a confirmed command to it: the same UPS after a USB
+        drop-out matches, another UPS does not."""
+        i = self.info
+        return (i.vendor_id, i.product_id, i.serial or getattr(self.backend, "path", ""), i.model)
 
     def _read_capacity_mode(self):
         f = next((f for f in self.fields if f.kind == "value" and (f.page, f.usage) == (BATTERY, 0x2C)), None)
@@ -244,6 +284,92 @@ class Ups:
         failed = tuple(sorted(rid for rid, rep in reports.items() if rep is None))
         return Snapshot(time=time.time(), values=values, status=status, failed_reports=failed)
 
+    # -- battery tests ------------------------------------------------------------------
+    def test_refusal(self, kind, snap, strict=True):
+        """Why a test of this kind cannot start now, as a sentence for the user, or None.
+        strict: snap was read for this check, so a missing self_test, charge or load value
+        means the UPS did not answer; otherwise missing values are not judged."""
+        if self.test_field is None:
+            if "self_test" in self.by_key:
+                return ("UPS Tray does not start tests on this UPS: its test control shares a USB report "
+                        "with other values.")
+            return "This UPS does not offer a battery test over USB."
+        if snap is None or not snap.status.ok:
+            return "The UPS is not answering."
+        if snap.status.on_battery:
+            return "The UPS is running on battery. Start the test when it is back on mains power."
+        if snap.values.get("self_test") == TEST_RUNNING:
+            return "A battery test is already running."
+        if strict and snap.values.get("self_test") is None:
+            return "The UPS did not report its test state just now. Try again in a moment."
+        if kind == CALIBRATION:
+            if "charge" not in self.by_key or "load" not in self.by_key:
+                return "The UPS does not report the battery charge and the load, which a runtime calibration needs."
+            charge, load = snap.values.get("charge"), snap.values.get("load")
+            if strict and (charge is None or load is None):
+                return "The UPS did not report the battery charge and the load just now. Try again in a moment."
+            if charge is not None and charge < 99.95:
+                return ("The battery is at %s. A runtime calibration needs a full battery: try again when the "
+                        "UPS shows 100 %%." % model.format_value(self.by_key["charge"], charge))
+            if load is not None and load < 10:
+                return ("The load is %s. A runtime calibration needs at least 10 %%: connect more equipment "
+                        "(a lamp will do) and try again." % model.format_value(self.by_key["load"], load))
+        return None
+
+    def _test_value(self):
+        f = self.test_field
+        rep = self.backend.read_reports({f.report_id}).get(f.report_id)
+        return f.signed(self.backend.value(rep, f)) if rep else None
+
+    def start_test(self, kind, sleep=time.sleep):
+        """Start a battery self-test (QUICK_TEST) or a runtime calibration (CALIBRATION) the
+        way apcupsd's apctest does: check that the UPS can run it, abort anything running and
+        clear the last result, wait until the UPS reports no test, then send the command.
+        Raises TestRefused (with a sentence for the user) or OSError."""
+        if kind not in (QUICK_TEST, CALIBRATION):
+            raise ValueError("not a test: %r" % (kind,))
+        with self._lock:
+            if self.closed:
+                raise TestRefused("The UPS is not connected.")
+            reason = self.test_refusal(kind, self._snapshot(["self_test", "charge", "load"], 0))
+            if reason:
+                raise TestRefused(reason)
+            f = self.test_field
+            try:
+                self.backend.write_test(f, TEST_ABORT)      # in case a calibration runs, as apctest does
+            except OSError as e:
+                log.info("test: abort before clearing failed (%s); going on", e)
+            self.backend.write_test(f, TEST_CLEAR)
+            for _ in range(20):
+                self._check_not_closing()
+                if self._test_value() == NO_TEST:
+                    break
+                sleep(0.5)
+            else:
+                raise TestRefused("The UPS did not clear its last test result, so no test was started.")
+            # clearing can take seconds: judge mains, charge and load again right before starting
+            reason = self.test_refusal(kind, self._snapshot(["self_test", "charge", "load"], 0))
+            if reason:
+                raise TestRefused(reason)
+            self._check_not_closing()
+            self.backend.write_test(f, kind)
+            log.info("test: %s requested", model.TEST_NAMES[kind].lower())
+
+    def _check_not_closing(self):
+        if self._closing:
+            raise TestRefused("The UPS was disconnected (or Windows took it for a driver change), so no test "
+                              "was started.")
+
+    def abort_test(self):
+        """Ask the UPS to stop a running self-test or calibration."""
+        with self._lock:
+            if self.closed:
+                raise TestRefused("The UPS is not connected.")
+            if self.test_field is None:
+                raise TestRefused(self.test_refusal(TEST_ABORT, None))
+            self.backend.write_test(self.test_field, TEST_ABORT)
+            log.info("test: abort requested")
+
     def export(self):
         """Plain-data description plus current raw values (diagnostics and test fixtures)."""
         with self._lock:
@@ -277,6 +403,7 @@ class Ups:
                 "buttons_on": buttons_on, "info": info}
 
     def close(self):
+        self._closing = True              # a test start holding the lock gives up within 0.5 s
         with self._lock:
             if self.closed:
                 return
@@ -295,6 +422,7 @@ class RecordedBackend:
         self.raw = {}
         self.on = {}
         self.offline = False
+        self.writes = []          # Test commands written, in order
         self.reload(data)
 
     def reload(self, data):
@@ -327,6 +455,21 @@ class RecordedBackend:
 
     def buttons(self, report, page, link):
         return list(self.on.get((report[1], page, link)) or [])
+
+    def write_test(self, f, command):
+        """Records the command and answers like an APC UPS: clear -> no test, start ->
+        running, abort -> aborted (when running)."""
+        if self.offline:
+            raise OSError(31, "the UPS did not take the command")
+        self.writes.append(command)
+        key = (f.report_id, f.page, f.usage, f.link)
+        if command == TEST_CLEAR:
+            self.raw[key] = NO_TEST
+        elif command == TEST_ABORT:
+            if self.raw.get(key) == TEST_RUNNING:
+                self.raw[key] = 4
+        else:
+            self.raw[key] = TEST_RUNNING
 
     def close(self):
         pass

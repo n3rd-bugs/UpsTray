@@ -1,11 +1,12 @@
 """Tk windows: Settings (which readings become tray icons, display, notifications)
-and Details (every value the UPS reports, live). Both run on the app thread."""
+and Details (every value the UPS reports, live, and the battery test). Both run on
+the app thread."""
 import base64
 import json
 import tkinter as tk
 from tkinter import colorchooser, filedialog, font as tkfont, messagebox, ttk
 
-from . import DISPLAY_NAME, VERSION, glyphs, model
+from . import DISPLAY_NAME, VERSION, device, glyphs, model
 
 CHECK_ON, CHECK_OFF = "☑", "☐"
 GROUP_ORDER = ["Power", "Battery", "Settings", "Device", "Other"]
@@ -648,6 +649,20 @@ class DetailsWindow:
         self.status.pack(side="left")
         self.device = ttk.Label(outer, text="", style="Muted.TLabel")
         self.device.pack(anchor="w", pady=(pad // 2, pad))
+        # the button bar and the battery test go in before the list, so they always stay visible
+        bottom = ttk.Frame(outer)
+        bottom.pack(side="bottom", fill="x", pady=(pad, 0))
+        test = ttk.LabelFrame(outer, text="Battery test", padding=(pad, pad // 2))
+        test.pack(side="bottom", fill="x", pady=(pad, 0))
+        self.abort_btn = ttk.Button(test, text="Abort...", command=self.ask_abort)
+        self.abort_btn.pack(side="right")
+        self.cal_btn = ttk.Button(test, text="Runtime calibration...",
+                                  command=lambda: self.ask_test(device.CALIBRATION))
+        self.cal_btn.pack(side="right", padx=(0, pad // 2))
+        self.self_btn = ttk.Button(test, text="Self-test...", command=lambda: self.ask_test(device.QUICK_TEST))
+        self.self_btn.pack(side="right", padx=(0, pad // 2))
+        self.test_label = ttk.Label(test, text="", wraplength=int(300 * self.scale), justify="left")
+        self.test_label.pack(side="left", fill="x", expand=True)
         frame = ttk.Frame(outer)
         frame.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(frame, columns=("value", "where"), selectmode="extended")
@@ -661,8 +676,6 @@ class DetailsWindow:
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
-        bottom = ttk.Frame(outer)
-        bottom.pack(fill="x", pady=(pad, 0))
         ttk.Button(bottom, text="Copy all", command=self.copy).pack(side="left")
         ttk.Button(bottom, text="Save device report...", command=self.save_report).pack(side="left",
                                                                                       padx=(pad, 0))
@@ -671,7 +684,7 @@ class DetailsWindow:
         ttk.Button(bottom, text="Close", command=self.close).pack(side="right")
         ttk.Button(bottom, text="Settings...", command=self.app.open_settings).pack(side="right",
                                                                                  padx=(0, pad))
-        _place(self.win, 640, 600, self.scale)
+        _place(self.win, 640, 650, self.scale)
         self._built_for = None
         self.refresh()
 
@@ -708,8 +721,9 @@ class DetailsWindow:
                                            and snap.status.known != getattr(self, "_status_known", None)):
             self._rebuild()
         st = snap.status if snap else model.Status()
-        self.status.configure(text=st.summary() if ups else "No UPS found")
+        self.status.configure(text=self.app._status_text() if ups else "No UPS found")
         self.device.configure(text=device_line(ups))
+        self.refresh_test()
         self.dot.delete("all")
         r = int(12 * self.scale)
         self.dot.create_oval(1, 1, r, r, fill=STATE_COLORS.get(st.state if ups else "offline"), outline="")
@@ -727,8 +741,77 @@ class DetailsWindow:
                 self.tree.item(rd.key, values=(model.format_value(rd, snap.values[rd.key], s["temperature_unit"],
                                                                   s["runtime_style"]), where))
 
+    # -- battery test ---------------------------------------------------------------
+    def refresh_test(self):
+        if not self.win.winfo_exists():
+            return
+        can_start, can_abort = self.app.test_controls()
+        self.test_label.configure(text=self.app.test_text())
+        for button, on in ((self.self_btn, can_start), (self.cal_btn, can_start), (self.abort_btn, can_abort)):
+            button.state(["!disabled"] if on else ["disabled"])
+
+    def _calibration_detail(self):
+        ups, snap = self.app.ups, self.app.last_snapshot
+        values = snap.values if snap else {}
+        now = []
+        for key in ("charge", "load"):
+            r = ups.by_key.get(key)
+            if r and values.get(key) is not None:
+                now.append("%s %s" % (r.name.lower() if key == "load" else "battery",
+                                      model.format_value(r, values[key])))
+        runtime = values.get("runtime")
+        took = ""
+        if runtime:
+            took = " At the current load that takes about %s." % model.runtime_text(runtime * 0.75)
+        return ("The UPS runs your equipment on battery until the battery is down to about 25 %, then goes "
+                "back to mains power and recharges. This teaches it how long the battery really lasts." + took +
+                ("\n\nNow: %s. Keep the load steady while it runs." % ", ".join(now) if now else "") +
+                "\n\nUntil the battery has recharged, which takes hours, it cannot carry the load for as long "
+                "if mains power fails. The UPS can also show 100 % before a large battery is really full: for "
+                "an accurate result, leave it on mains for several hours first."
+                "\n\nYou can abort the calibration from the tray menu or this window.")
+
+    def ask_test(self, kind):
+        """Confirm, then start a battery self-test or a runtime calibration."""
+        name = model.TEST_NAMES[kind]
+        reason = self.app.test_refusal(kind)
+        if reason:
+            messagebox.showinfo(name, reason, parent=self.win)
+            return
+        ups_id = self.app.ups.identity()          # the UPS the user is looking at while answering
+        if kind == device.CALIBRATION:
+            ok = messagebox.askokcancel(name, "Start a runtime calibration?", detail=self._calibration_detail(),
+                                        icon="warning", default="cancel", parent=self.win)
+        else:
+            ok = messagebox.askokcancel(
+                name, "Run a battery self-test now?",
+                detail="The UPS switches your equipment to battery for a few seconds, checks the battery and "
+                       "switches back to mains power. If the battery fails, the UPS goes straight back to mains "
+                       "and reports the error.\n\nSave your work first if the battery is old or failed a test "
+                       "before.", parent=self.win)
+        if ok:
+            self.app.request_test(kind, ups_id)
+
+    def ask_abort(self):
+        if not self.app.test_controls()[1]:
+            messagebox.showinfo(model.TEST_NAMES[0], "No battery test is running.", parent=self.win)
+            return
+        name = self.app.running_test_name()
+        ups_id = self.app.ups.identity()
+        if messagebox.askokcancel("Abort " + name.lower(), "Abort the %s?" % name.lower(),
+                                  detail="The UPS stops the test and goes back to mains power. An aborted "
+                                         "calibration leaves the runtime estimate as it was.",
+                                  icon="warning", parent=self.win):
+            self.app.request_abort(ups_id)
+
+    def show_message(self, title, message):
+        messagebox.showwarning(title, message, parent=self.win)
+
     def text_report(self):
-        lines = [self.status.cget("text"), self.device.cget("text"), ""]
+        lines = [self.status.cget("text"), self.device.cget("text")]
+        if self.test_label.cget("text"):
+            lines.append("Battery test: " + self.test_label.cget("text"))
+        lines.append("")
 
         def walk(parent, depth):
             for iid in self.tree.get_children(parent):

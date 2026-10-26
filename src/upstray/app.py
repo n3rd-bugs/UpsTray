@@ -4,7 +4,8 @@ the tray icons and the notifications.
 Threads:
   main    Tk (Settings/Details windows) and all app state; drains a queue
   tray    hidden window + Shell_NotifyIcon (tray.TrayHost)
-  poller  finds the UPS and reads snapshots (device.Ups); only posts results
+  poller  finds the UPS, reads snapshots and sends the battery-test commands the
+          user confirmed (device.Ups); only posts results
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -34,6 +35,8 @@ STATUS_TEXT_COLORS_LIGHT = {"battery": "#9A5B00", "low": "#C42B1C", "alert": "#C
 BADGE_COLORS = {"online": "#2D6A31", "battery": "#B26A00", "low": "#C42B1C", "alert": "#C42B1C",
                 "offline": "#5A5A5A"}
 STATUS_UID = 99
+TEST_START_TIMEOUT = 60       # s for the UPS to start (or finish) a test it was asked for
+TEST_RESULTS_DONE = (1, 2, 3, 4)
 
 log = logging.getLogger("upstray")
 _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -134,6 +137,17 @@ def uid_for(key, taken):
     return uid
 
 
+def new_test(kind, now, ours=False, seen=False):
+    """State of a battery test being followed: seen = the UPS reported it running (5),
+    ran = it went on battery after we asked for it, aborted = we asked it to stop."""
+    return {"kind": kind, "since": now, "ours": ours, "seen": seen, "ran": False, "aborted": False}
+
+
+def duration_text(seconds):
+    seconds = max(0, int(seconds))
+    return "%d s" % seconds if seconds < 60 else model.runtime_text(seconds / 60.0)
+
+
 def build_tooltip(app_title, reading, value_text, status_text, extras):
     lines = []
     if reading is not None:
@@ -161,6 +175,8 @@ class Poller(threading.Thread):
         self._reconnect = False
         self._fails = 0
         self._next_scan = 0.0
+        self._requests = []
+        self._req_lock = threading.Lock()
         self.ups = None
 
     def stop(self):
@@ -171,6 +187,56 @@ class Poller(threading.Thread):
         if reconnect:
             self._reconnect = True
         self._wake.set()
+
+    def request(self, action, kind, ups_id):
+        """Queue a battery-test command the user confirmed for the UPS with this identity:
+        ("test", QUICK_TEST or CALIBRATION) or ("abort", 0). The poller sends it, to that UPS
+        only, and posts test_sent or test_refused."""
+        with self._req_lock:
+            self._requests.append((action, kind, ups_id))
+        self._wake.set()
+
+    def release(self):
+        """Windows wants the UPS (device removal or a driver change): close it now and look
+        for it again a little later. Runs on the tray thread; waits for a read in progress."""
+        ups = self.ups
+        if ups is not None and not ups.closed:
+            ups.close()
+            log.info("UPS released for Windows (device removal or driver change)")
+        self._wake.set()
+
+    def _take_requests(self):
+        with self._req_lock:
+            out, self._requests = self._requests, []
+        return out
+
+    def _run_requests(self):
+        for action, kind, ups_id in self._take_requests():
+            try:
+                if self.ups is None or self.ups.closed:
+                    raise device.TestRefused("The UPS is not connected.")
+                if self.ups.identity() != ups_id:
+                    raise device.TestRefused("A different UPS is connected now than the one you confirmed "
+                                             "the command for, so nothing was sent.")
+                if action == "test":
+                    self.ups.start_test(kind)
+                else:
+                    self.ups.abort_test()
+                self.app.post("test_sent", (action, kind))
+            except device.TestRefused as e:
+                self.app.post("test_refused", (action, kind, str(e)))
+            except OSError as e:
+                log.warning("test: %s failed: %s", action, e)
+                self.app.post("test_refused", (action, kind, "The UPS did not take the command (%s)." % (
+                    e.strerror or e)))
+            except Exception as e:
+                # never left unanswered: the app keeps its test buttons off until it hears back
+                log.exception("test: %s failed", action)
+                self.app.post("test_refused", (action, kind, "Sending the command failed (%s)." % (e,)))
+
+    def _refuse_requests(self):
+        for action, kind, _ in self._take_requests():
+            self.app.post("test_refused", (action, kind, "The UPS is not connected."))
 
     def run(self):
         while not self._stop.is_set():
@@ -190,20 +256,28 @@ class Poller(threading.Thread):
                 self.ups.close()
                 self.ups = None
                 self._next_scan = 0.0
+            if self.ups is not None and self.ups.closed:
+                # released for Windows: give the removal or driver change time before looking again
+                self.ups = None
+                self._next_scan = now + 5.0
+                self.app.post("disconnected", None)
             if self.ups is None:
                 if now < self._next_scan:
+                    self._refuse_requests()
                     return
                 backend = device.find_backend(s.get("preferred_serial", ""))
                 if backend is None:
                     self._next_scan = now + 5.0
                     # keeps the app's offline timer (and notification) running while we look
                     self.app.post("disconnected", None)
+                    self._refuse_requests()
                     return
                 self.ups = device.Ups(backend, s.get("nominal_watts", 0))
                 self._fails = 0
                 log.info("UPS found: %s serial=%s readings=%d", self.ups.info.title(),
                          self.ups.info.serial, len(self.ups.readings))
                 self.app.post("connected", self.ups)
+            self._run_requests()
             snap = self.ups.snapshot(self.app.wanted_keys(), s.get("low_charge_percent", 0))
             self._fails = 0 if snap.status.ok else self._fails + 1
             self.app.post("snapshot", snap)
@@ -252,10 +326,15 @@ class App:
         self._low_notified = False
         self._offline_since = None
         self._offline_notified = False
+        self._test = None                 # the battery test being followed (dict), see _track_test
+        self._test_pending = None         # (action, kind) sent to the poller, not answered yet
+        self._last_test_value = None      # Test reading of the previous snapshot
+        self._test_ups_id = None          # identity of the UPS those two belong to
         self._quitting = False
-        self._menu = {"status": DISPLAY_NAME, "autostart": False, "autostart_ok": True}
-        self.tray = tray.TrayHost(self._from_tray, lambda: dict(self._menu))
+        self._menu = {"status": DISPLAY_NAME, "autostart": False, "autostart_ok": True,
+                      "test_start": False, "test_abort": False}
         self.poller = Poller(self)
+        self.tray = tray.TrayHost(self._from_tray, lambda: dict(self._menu), self.poller.release)
 
     # -- threads -> app -------------------------------------------------------------
     def post(self, kind, payload=None):
@@ -265,7 +344,8 @@ class App:
         self.q.put(("tray", action))
 
     def wanted_keys(self):
-        keys = set(self.settings["tray_readings"]) | set(self.settings["tooltip_readings"]) | {"charge"}
+        keys = (set(self.settings["tray_readings"]) | set(self.settings["tooltip_readings"])
+                | {"charge", "self_test"})
         if self.details_window is not None or self.settings_window is not None:
             return None                       # everything
         return sorted(keys)
@@ -318,8 +398,18 @@ class App:
                 self._update_icons()
             elif payload == "resume":
                 self.poller.wake()
+            elif payload in ("selftest", "calibrate", "abort_test"):
+                # the Details window shows the test; ask there once it is drawn, outside this queue drain
+                self.open_details()
+                self.root.after(100, lambda: self._ask_test(payload))
+        elif kind == "test_sent":
+            self._test_sent(*payload)
+        elif kind == "test_refused":
+            self._test_refused(*payload)
         elif kind == "connected":
             self.ups = payload
+            self.tray.watch(payload.handle)
+            self._follow_tests_of(payload.identity())
             if payload.info.serial and payload.info.serial != self.settings.get("preferred_serial"):
                 s = dict(self.settings)
                 s["preferred_serial"] = payload.info.serial
@@ -328,6 +418,7 @@ class App:
             if self.settings_window:
                 self.settings_window.reload()
         elif kind == "disconnected":
+            self.tray.watch(None)
             self.last_snapshot = device.Snapshot(time=time.time(), status=model.Status(ok=False))
             self._after_snapshot()
         elif kind == "snapshot":
@@ -335,6 +426,7 @@ class App:
             self._after_snapshot()
 
     def _after_snapshot(self):
+        self._track_test()
         self._update_icons()
         self._notify()
         self._refresh_menu()
@@ -385,7 +477,12 @@ class App:
         if self.ups is None:
             return "Looking for a UPS..."
         snap = self.last_snapshot
-        return snap.status.summary() if snap else "Reading the UPS..."
+        if not snap:
+            return "Reading the UPS..."
+        text = snap.status.summary()
+        if snap.status.ok and self._test and (self._test["seen"] or self._test["ran"]):
+            text += ", %s running" % model.TEST_NAMES[self._test["kind"]].lower()
+        return text
 
     def _tooltip_extras(self, skip):
         out = []
@@ -528,6 +625,192 @@ class App:
                 self.tray.balloon("UPS not responding", "%s does not answer over USB. Check the cable and "
                                   "that the UPS is on." % title, warning=True)
 
+    # -- battery tests --------------------------------------------------------------
+    def test_value(self):
+        """The UPS's Test reading from the last snapshot (5 running, 1 passed ...), or None."""
+        snap = self.last_snapshot
+        if snap is None or not snap.status.ok:
+            return None
+        v = snap.values.get("self_test")
+        return None if v is None else int(v)
+
+    def test_controls(self):
+        """(can_start, can_abort) for the Details buttons and the tray menu."""
+        if self.ups is None or self.ups.test_field is None or self._test_pending:
+            return False, False
+        running = self._test is not None or self.test_value() == device.TEST_RUNNING
+        ok = self.test_value() is not None
+        return ok and not running, running
+
+    def test_refusal(self, kind):
+        """Why a test cannot start, judged on the last snapshot (the poller checks again with
+        fresh values before it writes), or None."""
+        if self.ups is None:
+            return "No UPS is connected."
+        if self._test is not None:
+            return "A battery test is already running."
+        return self.ups.test_refusal(kind, self.last_snapshot, strict=False)
+
+    def test_text(self):
+        """One line on the battery test for the Details window."""
+        if self.ups is None:
+            return ""
+        if self.ups.test_field is None:
+            return self.ups.test_refusal(device.QUICK_TEST, None)
+        if self._test_pending:
+            action, kind = self._test_pending
+            return "Aborting the test..." if action == "abort" else "Starting the %s..." % (
+                model.TEST_NAMES[kind].lower())
+        t = self._test
+        if t is not None:
+            name = model.TEST_NAMES[t["kind"]]
+            if not t["seen"] and not t["ran"]:
+                return "Waiting for the UPS to start the %s..." % name.lower()
+            text = "%s running for %s" % (name, duration_text(time.time() - t["since"]))
+            snap = self.last_snapshot
+            charge = snap.values.get("charge") if snap and snap.status.ok else None
+            if charge is not None and "charge" in self.ups.by_key:
+                text += ", battery %s" % model.format_value(self.ups.by_key["charge"], charge)
+            return text
+        v = self.test_value()
+        if v is None:
+            return "Last result: -"
+        return "Last result: %s" % ("none" if v == device.NO_TEST else model.TEST_RESULTS.get(v, str(v)).lower())
+
+    def _follow_tests_of(self, ups_id):
+        """A USB drop-out brings the same UPS back and its test is still followed; another UPS
+        starts from scratch, so that its stored result is not taken for the old test's."""
+        if self._test_ups_id is not None and ups_id != self._test_ups_id:
+            if self._test is not None:
+                log.info("test: a different UPS is connected; no longer following the %s",
+                         model.TEST_NAMES[self._test["kind"]].lower())
+            self._test = None
+            self._last_test_value = None
+        self._test_ups_id = ups_id
+
+    def running_test_name(self):
+        return model.TEST_NAMES[self._test["kind"] if self._test else 0]
+
+    def _ask_test(self, action):
+        if self._quitting or self.details_window is None:
+            return
+        if action == "abort_test":
+            self.details_window.ask_abort()
+        else:
+            self.details_window.ask_test(device.QUICK_TEST if action == "selftest" else device.CALIBRATION)
+
+    def request_test(self, kind, ups_id):
+        """Start a test the user confirmed for the UPS with this identity (taken before the
+        question was asked); the poller checks that UPS again and sends it."""
+        self._test_pending = ("test", kind)
+        log.info("test: %s asked for", model.TEST_NAMES[kind].lower())
+        self.poller.request("test", kind, ups_id)
+        self._refresh_test_views()
+
+    def request_abort(self, ups_id):
+        self._test_pending = ("abort", 0)
+        log.info("test: abort asked for")
+        self.poller.request("abort", 0, ups_id)
+        self._refresh_test_views()
+
+    def _test_sent(self, action, kind, now=None):
+        now = time.time() if now is None else now
+        self._test_pending = None
+        if action == "test":
+            self._test = new_test(kind, now, ours=True)
+        elif self._test is not None:
+            self._test["aborted"] = True
+        self._refresh_test_views()
+
+    def _test_refused(self, action, kind, message):
+        self._test_pending = None
+        what = "abort" if action == "abort" else model.TEST_NAMES[kind].lower()
+        log.warning("test: %s not sent: %s", what, message)
+        title = "Battery test not aborted" if action == "abort" else "%s not started" % model.TEST_NAMES[kind]
+        if self.details_window is not None:
+            self.details_window.show_message(title, message)
+        else:
+            self.tray.balloon(title, message, warning=True)
+        self._refresh_test_views()
+
+    def _track_test(self, now=None):
+        """Follow the UPS's Test reading to a result. A calibration reads 5 (running) until it
+        ends; an APC quick self-test keeps reading 6 (no test) while the UPS is on battery, so
+        for a test asked for here, being on battery counts as running. A test the UPS ran by
+        itself (front panel, its regular self-test) shows as a change to a result."""
+        now = time.time() if now is None else now
+        value = self.test_value()
+        if self.ups is None or value is None:
+            return
+        prev, self._last_test_value = self._last_test_value, value
+        t = self._test
+        if value == device.TEST_RUNNING:
+            if t is None:
+                self._test = new_test(0, now, seen=True)
+                log.info("test: a battery test is running")
+            elif not t["seen"]:
+                t["seen"] = True
+                log.info("test: %s running", model.TEST_NAMES[t["kind"]].lower())
+            return
+        if t is None:
+            if prev is not None and value != prev and value in TEST_RESULTS_DONE:
+                self._test_finished(new_test(0, now), value, None)
+            return
+        name = model.TEST_NAMES[t["kind"]]
+        if value == device.NO_TEST and not t["seen"]:
+            st = self.last_snapshot.status
+            discharging = st.on_battery or "Discharging" in st.flags
+            if discharging and not t["ran"]:
+                t["ran"] = True
+                log.info("test: %s running (the UPS is on battery)", name.lower())
+            if discharging or now - t["since"] < TEST_START_TIMEOUT:
+                return
+            self._test = None
+            if t["ran"]:
+                log.warning("test: %s ended without a result", name.lower())
+                self.tray.balloon("%s ended" % name, "The UPS ran on battery for the test but reported no "
+                                  "result.", warning=True)
+            else:
+                log.warning("test: the UPS did not start the %s", name.lower())
+                self.tray.balloon("%s did not start" % name, "The UPS did not start the test. Its charge, load "
+                                  "or mains power may have changed; the Details window shows the readings.",
+                                  warning=True)
+            return
+        self._test = None
+        self._test_finished(t, value, now - t["since"])
+
+    def _test_finished(self, t, value, seconds):
+        """Log and notify a test's result; seconds is None for a test only seen ending."""
+        name = model.TEST_NAMES[t["kind"]]
+        result = model.TEST_RESULTS.get(value, str(value))
+        log.info("test: %s ended%s: %s", name.lower(), "" if seconds is None else " after %d s" % seconds, result)
+        if value == 1:
+            if t["kind"] == device.CALIBRATION:
+                title = "Runtime calibration finished"
+                text = "The UPS ran on battery for %s and has learned how long the battery lasts." % (
+                    duration_text(seconds or 0))
+            else:
+                title, text = "%s passed" % name, "The UPS reports that the battery passed its test."
+            warning = False
+        elif value == 2:
+            title, text, warning = "%s: warning" % name, "The UPS reported a warning. Check its front panel.", True
+        elif value == 3:
+            title, text, warning = ("%s failed" % name, "The UPS reported an error: the battery may need "
+                                    "replacing.", True)
+        elif value == 4:
+            title = "%s aborted" % name
+            warning = not t["aborted"]
+            text = ("Stopped from UPS Tray." if t["aborted"] else "The UPS stopped the test, for example because "
+                    "of a mains problem, a low battery or a change in load.")
+        else:
+            title, text, warning = "%s ended" % name, "The UPS reports: %s." % result.lower(), False
+        self.tray.balloon(title, text, warning=warning)
+
+    def _refresh_test_views(self):
+        self._refresh_menu()
+        if self.details_window:
+            self.details_window.refresh_test()
+
     def _battery_summary(self):
         parts = []
         for key in ("charge", "runtime", "load"):
@@ -539,8 +822,10 @@ class App:
     # -- menu, autostart --------------------------------------------------------------
     def _refresh_menu(self):
         title = self.ups.info.title() if self.ups else DISPLAY_NAME
+        can_start, can_abort = self.test_controls()
         self._menu = {"status": "%s: %s" % (title, self._status_text()),
-                      "autostart": self.autostart_enabled(), "autostart_ok": self.autostart_possible()}
+                      "autostart": self.autostart_enabled(), "autostart_ok": self.autostart_possible(),
+                      "test_start": can_start, "test_abort": can_abort}
 
     def autostart_possible(self):
         return True

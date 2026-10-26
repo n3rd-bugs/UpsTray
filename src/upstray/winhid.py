@@ -1,10 +1,15 @@
-"""Read-only access to USB HID devices through hid.dll and SetupAPI (ctypes, no driver).
+"""Access to USB HID devices through hid.dll and SetupAPI (ctypes, no driver).
 
-Only the calls needed to READ a UPS are bound: device enumeration, attributes,
-strings, the parsed report descriptor (caps, value caps, button caps, link
-collections), HidD_GetFeature and the HidP_* extractors. Nothing here can send
-a report to the device: HidD_SetFeature, HidD_SetOutputReport and WriteFile are
-deliberately not bound, so the app cannot change a UPS setting or start a test.
+Reading: device enumeration, attributes, strings, the parsed report descriptor
+(caps, value caps, button caps, link collections), HidD_GetFeature and the HidP_*
+extractors, all on a handle opened without read or write access.
+
+Writing: exactly one thing, HidDevice.write_test(), which sets the Power Device
+Test usage (0x84:0x58) to start, clear or abort a battery test. It refuses every
+other value and any feature report that carries more than the Test usage, and it
+opens a handle with write access for that one command only. Output reports,
+WriteFile and DeviceIoControl are not bound, so the app cannot change a UPS
+setting or switch the output off.
 """
 import ctypes
 import ctypes.wintypes as wt
@@ -28,6 +33,11 @@ OPEN_EXISTING = 3
 
 DIGCF_PRESENT = 0x2
 DIGCF_DEVICEINTERFACE = 0x10
+
+# The one usage UPS Tray writes, and the values it may write to it: 0 clears the last
+# result, 1 starts a quick self-test, 2 a deep test (runtime calibration), 3 aborts.
+TEST_PAGE, TEST_USAGE = 0x84, 0x58
+TEST_COMMANDS = (0, 1, 2, 3)
 
 
 class GUID(ctypes.Structure):
@@ -109,6 +119,8 @@ hid.HidD_FreePreparsedData.argtypes = [_PDATA]
 hid.HidD_FreePreparsedData.restype = wt.BOOLEAN
 hid.HidD_GetFeature.argtypes = [wt.HANDLE, ctypes.c_void_p, wt.ULONG]
 hid.HidD_GetFeature.restype = wt.BOOLEAN
+hid.HidD_SetFeature.argtypes = [wt.HANDLE, ctypes.c_void_p, wt.ULONG]
+hid.HidD_SetFeature.restype = wt.BOOLEAN
 for _name in ("HidD_GetProductString", "HidD_GetManufacturerString", "HidD_GetSerialNumberString"):
     getattr(hid, _name).argtypes = [wt.HANDLE, ctypes.c_void_p, wt.ULONG]
     getattr(hid, _name).restype = wt.BOOLEAN
@@ -131,6 +143,9 @@ hid.HidP_GetUsageValue.restype = wt.LONG
 hid.HidP_GetUsages.argtypes = [ctypes.c_int, wt.USHORT, wt.USHORT, ctypes.POINTER(wt.USHORT),
                                ctypes.POINTER(wt.ULONG), _PDATA, ctypes.c_void_p, wt.ULONG]
 hid.HidP_GetUsages.restype = wt.LONG
+hid.HidP_SetUsageValue.argtypes = [ctypes.c_int, wt.USHORT, wt.USHORT, wt.USHORT, wt.ULONG, _PDATA,
+                                   ctypes.c_void_p, wt.ULONG]
+hid.HidP_SetUsageValue.restype = wt.LONG
 hid.HidP_MaxUsageListLength.argtypes = [ctypes.c_int, wt.USHORT, _PDATA]
 hid.HidP_MaxUsageListLength.restype = wt.ULONG
 
@@ -156,6 +171,20 @@ k32.CloseHandle.restype = wt.BOOL
 
 class HidError(OSError):
     pass
+
+
+def test_report_alone(entries, report_id):
+    """True when feature report `report_id` carries the Test usage and nothing else, so
+    writing it cannot touch another value. entries: (page, usage_min, usage_max, report_id)
+    of every feature value and button cap."""
+    found = False
+    for page, lo, hi, rid in entries:
+        if rid != report_id:
+            continue
+        if (page, lo, hi) != (TEST_PAGE, TEST_USAGE, TEST_USAGE):
+            return False
+        found = True
+    return found
 
 
 def interface_paths():
@@ -323,6 +352,37 @@ class HidDevice:
         if status != HIDP_STATUS_SUCCESS:
             return None
         return list(arr)[:n.value]
+
+    def _feature_entries(self):
+        caps = self.value_caps(HidP_Feature) + self.button_caps(HidP_Feature)
+        return [(c.UsagePage, c.UsageMin, c.UsageMax if c.IsRange else c.UsageMin, c.ReportID) for c in caps]
+
+    def write_test(self, report_id, link, command):
+        """Set the Test usage in feature report `report_id`: the only report UPS Tray sends.
+        ValueError for any other value or a report that carries more than Test; HidError
+        when Windows or the UPS refuses."""
+        if type(command) is not int or command not in TEST_COMMANDS:
+            raise ValueError("not a test command: %r" % (command,))
+        if self.closed:
+            raise HidError(0, "the UPS is not open", self.path)
+        if not test_report_alone(self._feature_entries(), report_id):
+            raise ValueError("feature report %d carries more than the Test usage" % report_id)
+        handle = k32.CreateFileW(self.path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                 None, OPEN_EXISTING, 0, None)
+        if not handle or handle == INVALID_HANDLE_VALUE:
+            raise HidError(ctypes.get_last_error(), "cannot open the UPS for writing", self.path)
+        try:
+            # Test is alone in its report, so the report is its id and the Test value
+            buf = (ctypes.c_ubyte * self.feature_len)()
+            buf[0] = report_id
+            status = hid.HidP_SetUsageValue(HidP_Feature, TEST_PAGE, link, TEST_USAGE, command, self._pdata,
+                                            buf, self.feature_len) & 0xFFFFFFFF
+            if status != HIDP_STATUS_SUCCESS:
+                raise HidError(0, "HidP_SetUsageValue status 0x%08X" % status, self.path)
+            if not hid.HidD_SetFeature(handle, buf, self.feature_len):
+                raise HidError(ctypes.get_last_error(), "the UPS did not take the command", self.path)
+        finally:
+            k32.CloseHandle(handle)
 
     def close(self):
         if getattr(self, "_pdata", None):

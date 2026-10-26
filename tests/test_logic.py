@@ -1,9 +1,10 @@
 """Unit tests that need no UPS: the descriptor model, readings, status, formatting,
-settings, tray helpers and the icon renderer, mostly against a recorded APC
-Smart-UPS 1500 (tests/fixtures/smart_ups_1500.json).
+settings, battery tests, tray helpers and the icon renderer, mostly against a
+recorded APC Smart-UPS 1500 (tests/fixtures/smart_ups_1500.json).
 
     python tests\\test_logic.py
 """
+import ast
 import copy
 import json
 import os
@@ -28,6 +29,8 @@ FIXTURE = os.path.join(HERE, "fixtures", "smart_ups_1500.json")
 STATUS_RID, STATUS_LINK = 7, 2
 AC_PRESENT, CHARGING, DISCHARGING, BATTERY_PRESENT = 0xD0, 0x44, 0x45, 0xD1
 BELOW_CAPACITY_LIMIT, RUNTIME_LIMIT_EXPIRED = 0x42, 0x43
+# Test usage of the recorded UPS: report 22, link 3 (Battery), alone in its report
+TEST_KEY = (22, 0x84, 0x58, 3)
 
 
 def load_fixture():
@@ -51,6 +54,15 @@ def make_ups(nominal_watts=0, mutate=None):
     if mutate:
         mutate(backend)
     return device.Ups(backend, nominal_watts), backend
+
+
+def full_and_loaded(backend, charge_tenths=1000, load_tenths=310):
+    backend.set_raw(24, 0x85, 0x66, 3, charge_tenths)        # fine charge (0.1 %)
+    backend.set_raw(44, 0x84, 0x35, 5, load_tenths)          # load (0.1 %)
+
+
+def no_sleep(_seconds):
+    pass
 
 
 def on_battery(backend, charge_tenths=None):
@@ -308,8 +320,94 @@ class TrayHelpers(unittest.TestCase):
     def test_message_ids_distinct(self):
         t = self.tray
         ids = [t.WM_TRAYCB, t.MSG_APPLY, t.MSG_BALLOON, t.MSG_QUIT, t.MSG_OPEN_SETTINGS, t.MSG_REQUEST_QUIT,
-               t.MSG_OPEN_DETAILS]
+               t.MSG_OPEN_DETAILS, t.MSG_WATCH]
         self.assertEqual(len(ids), len(set(ids)))
+        cmds = [t.IDM_DETAILS, t.IDM_SETTINGS, t.IDM_AUTOSTART, t.IDM_LOGS, t.IDM_EXIT, t.IDM_STATUS,
+                t.IDM_SELFTEST, t.IDM_CALIBRATE, t.IDM_ABORT_TEST]
+        self.assertEqual(len(cmds), len(set(cmds)))
+
+    def test_battery_menu(self):
+        t = self.tray
+        items = t.battery_menu({"test_start": True, "test_abort": False})
+        self.assertEqual([(i, e) for i, _, e in items],
+                         [(t.IDM_SELFTEST, True), (t.IDM_CALIBRATE, True), (t.IDM_ABORT_TEST, False)])
+        items = t.battery_menu({"test_start": False, "test_abort": True})
+        self.assertEqual([e for _, _, e in items], [False, False, True])
+        self.assertFalse(any(e for _, _, e in t.battery_menu({})))
+
+    def test_menu_has_the_battery_test_submenu(self):
+        import ctypes
+        import ctypes.wintypes as wt
+        t = self.tray
+        u32 = ctypes.WinDLL("user32")
+        u32.GetMenuItemCount.argtypes = [wt.HMENU]
+        u32.GetSubMenu.argtypes = [wt.HMENU, ctypes.c_int]
+        u32.GetSubMenu.restype = wt.HMENU
+        u32.GetMenuStringW.argtypes = [wt.HMENU, wt.UINT, wt.LPWSTR, ctypes.c_int, wt.UINT]
+        u32.GetMenuState.argtypes = [wt.HMENU, wt.UINT, wt.UINT]
+        MF_BYPOSITION = 0x400
+
+        def text(menu, pos):
+            buf = ctypes.create_unicode_buffer(128)
+            u32.GetMenuStringW(menu, pos, buf, 128, MF_BYPOSITION)
+            return buf.value
+
+        for state, sub_grayed, items_grayed in (
+                ({"status": "x", "test_start": True}, False, [False, False, True]),
+                ({"status": "x", "test_abort": True}, False, [True, True, False]),
+                ({"status": "x"}, True, [True, True, True])):
+            menu = t.TrayHost.build_menu(state)
+            try:
+                labels = [text(menu, i) for i in range(u32.GetMenuItemCount(menu))]
+                pos = labels.index("Battery test")
+                self.assertEqual(labels[pos - 1], "Settings...")
+                self.assertEqual(bool(u32.GetMenuState(menu, pos, MF_BYPOSITION) & t.MF_GRAYED), sub_grayed)
+                sub = u32.GetSubMenu(menu, pos)
+                self.assertTrue(sub)
+                self.assertEqual([text(sub, i) for i in range(3)],
+                                 ["Run self-test...", "Runtime calibration...", "Abort test..."])
+                self.assertEqual([bool(u32.GetMenuState(sub, i, MF_BYPOSITION) & t.MF_GRAYED) for i in range(3)],
+                                 items_grayed)
+            finally:
+                u32.DestroyMenu(menu)
+
+    def test_notices_wait_for_each_other(self):
+        t = self.tray
+        host = t.TrayHost(lambda a: None, lambda: {})
+        for n in range(6):
+            host.balloon("title %d" % n, "text", warning=False)
+        self.assertEqual([b[0] for b in host._balloons], ["title 2", "title 3", "title 4", "title 5"])
+        shown, timers = [], []
+        saved = t.shell32.Shell_NotifyIconW, t.u32.SetTimer, t.u32.KillTimer
+        t.shell32.Shell_NotifyIconW = lambda msg, nid: shown.append(nid._obj.szInfoTitle) or 1
+        t.u32.SetTimer = lambda hwnd, tid, ms, proc: timers.append(ms) or 1
+        t.u32.KillTimer = lambda *a: 1
+        try:
+            host._added = {123}
+            host._show_balloon()
+            host._show_balloon()                       # one is waiting/on screen: the next waits
+            self.assertEqual(shown, ["title 2"])
+            self.assertEqual(timers, [t.BALLOON_WAIT_MS])          # Windows may queue it first
+            host._wnd_proc(None, t.WM_TRAYCB, 0, (123 << 16) | t.NIN_BALLOONSHOW)
+            self.assertEqual(timers[-1], t.notice_display_ms())    # now on screen: its display time
+            self.assertGreaterEqual(timers[-1], 10000)
+            self.assertEqual(shown, ["title 2"])
+            host._wnd_proc(None, t.WM_TRAYCB, 0, (123 << 16) | t.NIN_BALLOONTIMEOUT)
+            self.assertEqual(shown, ["title 2", "title 3"])
+            host._wnd_proc(None, t.WM_TIMER, t.BALLOON_TIMER, 0)   # Windows never said: fallback
+            host._wnd_proc(None, t.WM_TRAYCB, 0, (123 << 16) | t.NIN_BALLOONUSERCLICK)
+            host._wnd_proc(None, t.WM_TRAYCB, 0, (123 << 16) | t.NIN_BALLOONHIDE)
+            self.assertEqual(shown, ["title 2", "title 3", "title 4", "title 5"])
+            self.assertFalse(host._balloon_up)
+        finally:
+            t.shell32.Shell_NotifyIconW, t.u32.SetTimer, t.u32.KillTimer = saved
+
+    def test_device_notice_layout(self):
+        import ctypes
+        t = self.tray
+        self.assertEqual(ctypes.sizeof(t.DEV_BROADCAST_HANDLE), 56 if ctypes.sizeof(ctypes.c_void_p) == 8 else 40)
+        self.assertEqual(t.DEV_BROADCAST_HANDLE.dbch_hdevnotify.offset,
+                         24 if ctypes.sizeof(ctypes.c_void_p) == 8 else 16)
 
 
 class AppHelpers(unittest.TestCase):
@@ -348,9 +446,11 @@ class PollerTests(unittest.TestCase):
         def __init__(self):
             self.settings = settings.normalize({"nominal_watts": 980})
             self.events = []
+            self.payloads = []
 
         def post(self, kind, payload=None):
             self.events.append(kind)
+            self.payloads.append(payload)
 
         def wanted_keys(self):
             return ["input_voltage", "load", "charge"]
@@ -393,6 +493,67 @@ class PollerTests(unittest.TestCase):
         self.poller.step(now=113)
         self.assertEqual(self.app.events[-1], "disconnected")      # still inside the 5 s back-off
         self.poller.step(now=115)
+        self.assertEqual(self.app.events[-2:], ["connected", "snapshot"])
+
+    def test_test_requests(self):
+        self.poller.step(now=100)
+        ups_id = self.poller.ups.identity()
+        self.poller.request("test", device.QUICK_TEST, ups_id)
+        self.poller.step(now=102)
+        self.assertEqual(self.app.events[-2:], ["test_sent", "snapshot"])
+        self.assertEqual(self.backend.writes, [3, 0, 1])
+        self.poller.request("test", device.CALIBRATION, ups_id)  # one is running already
+        self.poller.step(now=104)
+        i = self.app.events.index("test_refused")
+        self.assertEqual(self.app.payloads[i][:2], ("test", device.CALIBRATION))
+        self.assertIn("already running", self.app.payloads[i][2])
+        self.poller.request("abort", 0, ups_id)
+        self.poller.step(now=106)
+        self.assertEqual(self.app.events[-2:], ["test_sent", "snapshot"])
+        self.assertEqual(self.backend.writes, [3, 0, 1, 3])
+
+    def test_command_goes_only_to_the_confirmed_ups(self):
+        self.poller.step(now=100)
+        other = (0x051D, 0x0002, "AS9999999999", "Smart-UPS 1500")
+        self.poller.request("test", device.QUICK_TEST, other)
+        self.poller.step(now=102)
+        i = self.app.events.index("test_refused")
+        self.assertIn("different UPS", self.app.payloads[i][2])
+        self.assertEqual(self.backend.writes, [])
+
+    def test_requests_while_disconnected_are_refused(self):
+        self.found[0] = None
+        self.poller.request("test", device.QUICK_TEST, None)
+        self.poller.step(now=100)
+        self.assertEqual(self.app.events, ["disconnected", "test_refused"])
+        self.assertIn("not connected", self.app.payloads[1][2])
+        self.poller.request("abort", 0, None)
+        self.poller.step(now=101)                                 # inside the rescan back-off
+        self.assertEqual(self.app.events[-1], "test_refused")
+
+    def test_unexpected_error_is_still_answered(self):
+        self.poller.step(now=100)
+        def boom(kind, sleep=None):
+            raise RuntimeError("bug")
+        self.poller.ups.start_test = boom
+        self.poller.request("test", device.QUICK_TEST, self.poller.ups.identity())
+        self.poller.step(now=102)
+        self.assertIn("test_refused", self.app.events)
+        self.assertIsNotNone(self.poller.ups)                   # the UPS stays connected
+        self.assertEqual(self.app.events[-1], "snapshot")
+
+    def test_release_for_windows(self):
+        self.poller.step(now=100)
+        ups = self.poller.ups
+        self.poller.release()                                     # tray thread: a device removal notice
+        self.assertTrue(ups.closed)
+        self.poller.step(now=101)
+        self.assertEqual(self.app.events[-1], "disconnected")
+        self.assertIsNone(self.poller.ups)
+        n = len(self.app.events)
+        self.poller.step(now=104)                                 # leaves Windows time for the change
+        self.assertEqual(len(self.app.events), n)
+        self.poller.step(now=106)
         self.assertEqual(self.app.events[-2:], ["connected", "snapshot"])
 
     def test_reconnect_request_rebuilds_readings(self):
@@ -502,21 +663,236 @@ class ReviewRegressions(unittest.TestCase):
                     os.environ["LOCALAPPDATA"] = old
 
 
-class ReadOnly(unittest.TestCase):
-    def test_no_write_path_to_the_ups(self):
-        """The app must never be able to change a UPS setting or start a test."""
-        pkg = os.path.join(SRC, "upstray")
-        for name in os.listdir(pkg):
+class WritePath(unittest.TestCase):
+    """The one write to the UPS: the Test usage, from winhid.HidDevice.write_test only."""
+
+    WRITE_NAMES = ("HidD_SetFeature", "HidP_SetUsageValue", "GENERIC_WRITE")
+    NEVER = ("HidD_SetOutputReport", "WriteFile", "DeviceIoControl")
+
+    @staticmethod
+    def _source(name):
+        with open(os.path.join(SRC, "upstray", name), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_no_other_write_calls(self):
+        for name in sorted(os.listdir(os.path.join(SRC, "upstray"))):
             if not name.endswith(".py"):
                 continue
-            with open(os.path.join(pkg, name), encoding="utf-8") as fh:
-                code = fh.read()
             # strip docstrings/comments that mention the calls on purpose
-            code = re.sub(r'"""[\s\S]*?"""', "", code)
+            code = re.sub(r'"""[\s\S]*?"""', "", self._source(name))
             code = re.sub(r"#.*", "", code)
-            for call in ("HidD_SetFeature", "HidD_SetOutputReport", "HidP_SetUsageValue", "WriteFile",
-                         "DeviceIoControl"):
+            for call in self.NEVER:
                 self.assertNotIn(call, code, "%s uses %s" % (name, call))
+            if name != "winhid.py":
+                for call in self.WRITE_NAMES:
+                    self.assertNotIn(call, code, "%s uses %s" % (name, call))
+
+    def test_writes_happen_only_in_write_test(self):
+        tree = ast.parse(self._source("winhid.py"))
+        allowed = set()
+        for node in tree.body:
+            # the ctypes bindings (argtypes/restype) and the GENERIC_WRITE constant
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                t = node.targets[0]
+                if ((isinstance(t, ast.Attribute) and t.attr in ("argtypes", "restype"))
+                        or (isinstance(t, ast.Name) and t.id == "GENERIC_WRITE")):
+                    allowed.update(id(n) for n in ast.walk(node))
+            if isinstance(node, ast.ClassDef) and node.name == "HidDevice":
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef) and item.name == "write_test":
+                        allowed.update(id(n) for n in ast.walk(item))
+        uses = 0
+        for node in ast.walk(tree):
+            name = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) else None
+            if name in self.WRITE_NAMES:
+                uses += 1
+                self.assertIn(id(node), allowed, "winhid.py line %d uses %s" % (node.lineno, name))
+        self.assertGreaterEqual(uses, 4)
+
+    def test_report_must_carry_test_alone(self):
+        from upstray import winhid
+        alone = winhid.test_report_alone
+        self.assertTrue(alone([(0x84, 0x58, 0x58, 22), (0x84, 0x30, 0x30, 7)], 22))
+        self.assertFalse(alone([(0x84, 0x58, 0x58, 22), (0x84, 0x57, 0x57, 22)], 22))   # shutdown delay too
+        self.assertFalse(alone([(0x84, 0x55, 0x58, 22)], 22))                           # a usage range
+        self.assertFalse(alone([(0x84, 0x30, 0x30, 22)], 22))                           # no Test at all
+        self.assertFalse(alone([], 22))
+
+    def test_write_test_refuses_before_opening_anything(self):
+        from upstray import winhid
+        d = winhid.HidDevice.__new__(winhid.HidDevice)
+        d.close = lambda: None                    # never free the fake preparsed data
+        d.path = "\\\\?\\hid#no-such-device#{00000000-0000-0000-0000-000000000000}"
+        d.handle, d._pdata, d.feature_len = 1, winhid._PDATA(1), 5
+        d._feature_entries = lambda: [(0x84, 0x58, 0x58, 22)]
+        for bad in (4, 5, 6, -1, True, 2.0, None):
+            with self.assertRaises(ValueError):
+                d.write_test(22, 3, bad)
+        d._feature_entries = lambda: [(0x84, 0x58, 0x58, 22), (0x85, 0x58, 0x58, 22)]   # with BUPHibernate
+        with self.assertRaises(ValueError):
+            d.write_test(22, 3, 1)
+        d._feature_entries = lambda: [(0x84, 0x58, 0x58, 22)]
+        with self.assertRaises(winhid.HidError):
+            d.write_test(22, 3, 1)                # passes the checks, then the device does not exist
+        d.handle = None
+        with self.assertRaises(winhid.HidError):
+            d.write_test(22, 3, 1)                # closed
+
+
+class BatteryTests(unittest.TestCase):
+    """Ups.start_test / abort_test against the recording (writes go to the backend's log)."""
+
+    def test_writable_test_field(self):
+        ups, _ = make_ups()
+        self.assertEqual((ups.test_field.report_id, ups.test_field.link), (22, 3))
+
+    def test_self_test_follows_apctest(self):
+        ups, backend = make_ups()
+        ups.start_test(device.QUICK_TEST, sleep=no_sleep)
+        self.assertEqual(backend.writes, [3, 0, 1])           # abort, clear, then the quick test
+        self.assertEqual(ups.snapshot(["self_test"]).values["self_test"], device.TEST_RUNNING)
+
+    def test_calibration_with_full_battery_and_load(self):
+        ups, backend = make_ups(mutate=full_and_loaded)
+        ups.start_test(device.CALIBRATION, sleep=no_sleep)
+        self.assertEqual(backend.writes, [3, 0, 2])
+
+    def test_calibration_refused_below_full_charge(self):
+        ups, backend = make_ups()                             # the recording is at 99.0 %
+        with self.assertRaises(device.TestRefused) as cm:
+            ups.start_test(device.CALIBRATION, sleep=no_sleep)
+        self.assertIn("99.0 %", str(cm.exception))
+        self.assertEqual(backend.writes, [])
+        ups.start_test(device.QUICK_TEST, sleep=no_sleep)      # a self-test needs no full charge
+        self.assertEqual(backend.writes, [3, 0, 1])
+
+    def test_calibration_refused_with_little_load(self):
+        ups, backend = make_ups(mutate=lambda b: full_and_loaded(b, load_tenths=60))
+        with self.assertRaises(device.TestRefused) as cm:
+            ups.start_test(device.CALIBRATION, sleep=no_sleep)
+        self.assertIn("at least 10 %", str(cm.exception))
+        self.assertEqual(backend.writes, [])
+
+    def test_refused_on_battery_or_while_running_or_offline(self):
+        ups, backend = make_ups(mutate=lambda b: on_battery(b, 1000))
+        with self.assertRaises(device.TestRefused):
+            ups.start_test(device.QUICK_TEST, sleep=no_sleep)
+        ups, backend = make_ups(mutate=lambda b: b.set_raw(*TEST_KEY, device.TEST_RUNNING))
+        with self.assertRaises(device.TestRefused) as cm:
+            ups.start_test(device.QUICK_TEST, sleep=no_sleep)
+        self.assertIn("already running", str(cm.exception))
+        ups, backend = make_ups()
+        backend.offline = True
+        with self.assertRaises(device.TestRefused):
+            ups.start_test(device.QUICK_TEST, sleep=no_sleep)
+        self.assertEqual(backend.writes, [])
+        ups.close()
+        with self.assertRaises(device.TestRefused):
+            ups.start_test(device.QUICK_TEST, sleep=no_sleep)
+
+    def test_no_start_when_the_result_does_not_clear(self):
+        class Stuck(CountingBackend):
+            def write_test(self, f, command):
+                self.writes.append(command)          # the UPS keeps reporting 'aborted'
+                self.raw[TEST_KEY] = 4
+        backend = Stuck(load_fixture())
+        ups = device.Ups(backend)
+        sleeps = []
+        with self.assertRaises(device.TestRefused):
+            ups.start_test(device.QUICK_TEST, sleep=sleeps.append)
+        self.assertEqual(backend.writes, [3, 0])               # never the start command
+        self.assertEqual(sum(sleeps), 10)
+
+    def test_failed_abort_before_clearing_is_ignored(self):
+        class NoAbort(CountingBackend):
+            def write_test(self, f, command):
+                if command == device.TEST_ABORT:
+                    raise OSError(31, "stall")
+                super().write_test(f, command)
+        backend = NoAbort(load_fixture())
+        ups = device.Ups(backend)
+        ups.start_test(device.QUICK_TEST, sleep=no_sleep)
+        self.assertEqual(backend.writes, [0, 1])
+
+    def test_conditions_checked_again_before_the_start_command(self):
+        class MainsFailsWhileClearing(CountingBackend):
+            def write_test(self, f, command):
+                super().write_test(f, command)
+                if command == device.TEST_CLEAR:
+                    on_battery(self)
+        backend = MainsFailsWhileClearing(load_fixture())
+        ups = device.Ups(backend)
+        with self.assertRaises(device.TestRefused) as cm:
+            ups.start_test(device.QUICK_TEST, sleep=no_sleep)
+        self.assertIn("on battery", str(cm.exception))
+        self.assertEqual(backend.writes, [3, 0])              # cleared, never started
+
+    def test_close_stops_a_start_in_progress(self):
+        class SlowClear(CountingBackend):
+            def write_test(self, f, command):
+                self.writes.append(command)
+                self.raw[TEST_KEY] = 4                         # not cleared yet
+        backend = SlowClear(load_fixture())
+        ups = device.Ups(backend)
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            ups._closing = True                                # what close() sets from the tray thread
+        with self.assertRaises(device.TestRefused) as cm:
+            ups.start_test(device.QUICK_TEST, sleep=sleep)
+        self.assertIn("disconnected", str(cm.exception))
+        self.assertEqual(sleeps, [0.5])                        # gave up at the next check
+        self.assertEqual(backend.writes, [3, 0])
+
+    def test_identity(self):
+        a, _ = make_ups()
+        b, _ = make_ups()
+        self.assertEqual(a.identity(), b.identity())          # the same UPS after a reconnect
+        data = load_fixture()
+        data["info"]["serial"] = "AS0000000001"
+        self.assertNotEqual(device.Ups(device.RecordedBackend(data)).identity(), a.identity())
+
+    def test_abort(self):
+        ups, backend = make_ups(mutate=lambda b: b.set_raw(*TEST_KEY, device.TEST_RUNNING))
+        ups.abort_test()
+        self.assertEqual(backend.writes, [3])
+        self.assertEqual(ups.snapshot(["self_test"]).values["self_test"], 4)
+
+    def test_no_writes_when_test_shares_its_report(self):
+        def share(data):
+            extra = dict(next(f for f in data["fields"] if f["usage"] == 0x57 and f["page"] == 0x84))
+            extra["report_id"] = 22                     # DelayBeforeShutdown in the Test report
+            data["fields"].append(extra)
+        data = load_fixture()
+        share(data)
+        backend = CountingBackend(data)
+        ups = device.Ups(backend)
+        self.assertIsNone(ups.test_field)
+        self.assertIn("self_test", ups.by_key)          # still shown, just never written
+        for call in (lambda: ups.start_test(device.QUICK_TEST, sleep=no_sleep), ups.abort_test):
+            with self.assertRaises(device.TestRefused) as cm:
+                call()
+            self.assertIn("shares a USB report", str(cm.exception))
+        self.assertEqual(backend.writes, [])
+
+    def test_lenient_check_on_a_partial_snapshot(self):
+        ups, backend = make_ups(mutate=full_and_loaded)
+        partial = ups.snapshot(["input_voltage"])               # no charge, load or test state
+        self.assertIsNone(ups.test_refusal(device.CALIBRATION, partial, strict=False))
+        self.assertIn("did not report", ups.test_refusal(device.CALIBRATION, partial))
+        backend.set_raw(44, 0x84, 0x35, 5, None)                # the load read fails right then
+        with self.assertRaises(device.TestRefused) as cm:
+            ups.start_test(device.CALIBRATION, sleep=no_sleep)
+        self.assertIn("did not report the battery charge and the load", str(cm.exception))
+        self.assertEqual(backend.writes, [])
+
+    def test_no_test_usage(self):
+        data = load_fixture()
+        data["fields"] = [f for f in data["fields"] if (f["page"], f["usage"]) != (0x84, 0x58)]
+        ups = device.Ups(CountingBackend(data))
+        self.assertIsNone(ups.test_field)
+        self.assertIn("does not offer", ups.test_refusal(device.QUICK_TEST, ups.snapshot()))
 
 
 class Glyphs(unittest.TestCase):
@@ -555,12 +931,33 @@ class FakeTray:
     def __init__(self):
         self.balloons = []
         self.icons = []
+        self.watched = []
 
     def balloon(self, title, text, warning=False):
         self.balloons.append(title)
 
     def set_icons(self, icons):
         self.icons = icons
+
+    def watch(self, handle):
+        self.watched.append(handle)
+
+
+class temp_appdata:
+    """LOCALAPPDATA pointed at a temporary folder (settings and log stay out of the profile)."""
+
+    def __enter__(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old = os.environ.get("LOCALAPPDATA")
+        os.environ["LOCALAPPDATA"] = self.tmp.name
+        return self.tmp.name
+
+    def __exit__(self, *exc):
+        if self.old is None:
+            os.environ.pop("LOCALAPPDATA", None)
+        else:
+            os.environ["LOCALAPPDATA"] = self.old
+        self.tmp.cleanup()
 
 
 def tk_or_skip(test):
@@ -612,6 +1009,178 @@ class Notifications(unittest.TestCase):
                     os.environ.pop("LOCALAPPDATA", None)
                 else:
                     os.environ["LOCALAPPDATA"] = old
+
+
+class TestTracking(unittest.TestCase):
+    """The app follows a battery test: asked for, sent, running, result notice."""
+
+    def setUp(self):
+        tk_or_skip(self)
+        from upstray import app as appmod
+        self.appmod = appmod
+        self.env = temp_appdata()
+        self.env.__enter__()
+        self.a = appmod.App()
+        self.a.tray = FakeTray()
+        self.a.ups, self.backend = make_ups(mutate=full_and_loaded)
+        self.feed()
+
+    def tearDown(self):
+        self.a.root.update_idletasks()
+        self.a.root.destroy()
+        self.env.__exit__()
+
+    def feed(self, now=None):
+        self.a.last_snapshot = self.a.ups.snapshot(self.a.wanted_keys(), 20)
+        self.a._track_test(now=now)
+
+    def test_self_test_passes(self):
+        a = self.a
+        self.assertEqual(a.test_controls(), (True, False))
+        self.assertEqual(a.test_text(), "Last result: none")
+        a.request_test(device.QUICK_TEST, a.ups.identity())
+        self.assertEqual(a.poller._requests, [("test", device.QUICK_TEST, a.ups.identity())])
+        self.assertEqual(a.test_controls(), (False, False))          # waiting for the poller
+        self.assertEqual(a.test_text(), "Starting the battery self-test...")
+        a._test_sent("test", device.QUICK_TEST, now=1000)
+        self.backend.set_raw(*TEST_KEY, device.TEST_RUNNING)
+        self.feed(now=1002)
+        self.assertEqual(a.test_controls(), (False, True))
+        self.assertIn("battery self-test running", a._status_text())
+        self.assertTrue(a.test_text().startswith("Battery self-test running for"))
+        self.backend.set_raw(*TEST_KEY, 1)
+        self.feed(now=1010)
+        self.assertEqual(a.tray.balloons, ["Battery self-test passed"])
+        self.assertIsNone(a._test)
+        self.assertEqual(a.test_text(), "Last result: passed")
+        self.assertEqual(a.test_controls(), (True, False))
+
+    def test_result_without_seeing_it_run(self):
+        self.a._test_sent("test", device.QUICK_TEST, now=1000)
+        self.backend.set_raw(*TEST_KEY, 3)
+        self.feed(now=1004)
+        self.assertEqual(self.a.tray.balloons, ["Battery self-test failed"])
+
+    def test_quick_test_on_battery_with_no_test_reading(self):
+        # what a Smart-UPS 1500 does: Test stays 6 while on battery, then reads the result
+        a = self.a
+        a._test_sent("test", device.QUICK_TEST, now=1000)
+        self.feed(now=1001)
+        self.assertIn("Waiting for the UPS", a.test_text())
+        on_battery(self.backend)
+        for t in range(1003, 1100, 2):                              # longer than the start timeout
+            self.feed(now=t)
+        self.assertTrue(a.test_text().startswith("Battery self-test running for"))
+        self.assertIn("battery self-test running", a._status_text())
+        self.assertEqual(a.tray.balloons, [])
+        self.backend.set_buttons(STATUS_RID, 0x85, STATUS_LINK, [AC_PRESENT, CHARGING, BATTERY_PRESENT])
+        self.backend.set_raw(*TEST_KEY, 1)
+        self.feed(now=1101)
+        self.assertEqual(a.tray.balloons, ["Battery self-test passed"])
+
+    def test_quick_test_that_ends_without_a_result(self):
+        a = self.a
+        a._test_sent("test", device.QUICK_TEST, now=1000)
+        on_battery(self.backend)
+        self.feed(now=1004)
+        self.backend.set_buttons(STATUS_RID, 0x85, STATUS_LINK, [AC_PRESENT, CHARGING, BATTERY_PRESENT])
+        self.feed(now=1030)
+        self.assertEqual(a.tray.balloons, [])
+        self.feed(now=1000 + self.appmod.TEST_START_TIMEOUT + 1)
+        self.assertEqual(a.tray.balloons, ["Battery self-test ended"])
+        self.assertIsNone(a._test)
+
+    def test_result_of_a_test_the_ups_ran_by_itself(self):
+        a = self.a
+        self.backend.set_raw(*TEST_KEY, 1)
+        self.feed(now=1000)                                          # a new result
+        self.assertEqual(a.tray.balloons, ["Battery test passed"])
+        self.feed(now=1002)                                          # unchanged: no repeat
+        self.assertEqual(len(a.tray.balloons), 1)
+
+    def test_ups_that_never_starts(self):
+        a = self.a
+        a._test_sent("test", device.CALIBRATION, now=1000)
+        self.feed(now=1030)                                          # still 'no test': wait
+        self.assertEqual(a.tray.balloons, [])
+        self.assertIn("Waiting for the UPS", a.test_text())
+        self.feed(now=1000 + self.appmod.TEST_START_TIMEOUT + 1)
+        self.assertEqual(a.tray.balloons, ["Runtime calibration did not start"])
+        self.assertIsNone(a._test)
+
+    def test_calibration_aborted_from_here(self):
+        a = self.a
+        a._test_sent("test", device.CALIBRATION, now=1000)
+        self.backend.set_raw(*TEST_KEY, device.TEST_RUNNING)
+        self.feed(now=1010)
+        a.request_abort(a.ups.identity())
+        self.assertEqual(a.poller._requests[-1], ("abort", 0, a.ups.identity()))
+        a._test_sent("abort", 0)
+        self.backend.set_raw(*TEST_KEY, 4)
+        self.feed(now=1500)
+        self.assertEqual(a.tray.balloons, ["Runtime calibration aborted"])
+
+    def test_calibration_finishes(self):
+        a = self.a
+        a._test_sent("test", device.CALIBRATION, now=1000)
+        self.backend.set_raw(*TEST_KEY, device.TEST_RUNNING)
+        self.feed(now=1010)
+        self.backend.set_raw(*TEST_KEY, 1)
+        self.feed(now=1000 + 2 * 3600)
+        self.assertEqual(a.tray.balloons, ["Runtime calibration finished"])
+
+    def test_no_notice_for_the_result_found_at_start(self):
+        self.backend.set_raw(*TEST_KEY, 1)
+        self.a._last_test_value = None                                # as on the first snapshot
+        self.feed(now=1000)
+        self.assertEqual(self.a.tray.balloons, [])
+
+    def test_test_started_at_the_ups_is_followed(self):
+        a = self.a
+        self.backend.set_raw(*TEST_KEY, device.TEST_RUNNING)
+        self.feed(now=1000)
+        self.assertEqual(a.test_controls(), (False, True))
+        self.assertEqual(a.test_refusal(device.QUICK_TEST), "A battery test is already running.")
+        self.backend.set_raw(*TEST_KEY, 1)
+        self.feed(now=1012)
+        self.assertEqual(a.tray.balloons, ["Battery test passed"])
+
+    def test_refusal_without_details_window_is_a_notice(self):
+        self.a._test_pending = ("test", device.QUICK_TEST)
+        self.a._test_refused("test", device.QUICK_TEST, "The UPS is not connected.")
+        self.assertEqual(self.a.tray.balloons, ["Battery self-test not started"])
+        self.assertIsNone(self.a._test_pending)
+
+    def test_another_ups_does_not_finish_the_test(self):
+        a = self.a
+        a._handle("connected", a.ups)
+        a._test_sent("test", device.CALIBRATION, now=1000)
+        self.backend.set_raw(*TEST_KEY, device.TEST_RUNNING)
+        self.feed(now=1010)
+        a._handle("connected", a.ups)                                 # the same UPS after a drop-out
+        self.assertIsNotNone(a._test)
+        data = load_fixture()
+        data["info"]["serial"] = "AS0000000001"
+        other = CountingBackend(data)
+        other.set_raw(*TEST_KEY, 1)                                   # an old result of its own
+        a._handle("connected", device.Ups(other))
+        self.assertIsNone(a._test)
+        a.last_snapshot = a.ups.snapshot(a.wanted_keys(), 20)
+        a._track_test(now=1100)
+        self.assertEqual(a.tray.balloons, [])
+
+    def test_offline_pauses_the_test(self):
+        a = self.a
+        a._test_sent("test", device.CALIBRATION, now=1000)
+        self.backend.set_raw(*TEST_KEY, device.TEST_RUNNING)
+        self.feed(now=1010)
+        self.backend.offline = True
+        self.feed(now=5000)                                          # the USB link drops out
+        self.assertIsNotNone(a._test)
+        self.backend.offline = False
+        self.backend.set_raw(*TEST_KEY, 1)
+        self.feed(now=6000)
+        self.assertEqual(a.tray.balloons, ["Runtime calibration finished"])
 
 
 def ink_rows(px, size):
@@ -812,6 +1381,28 @@ class UiSmoke(unittest.TestCase):
                 save = buttons[0]
                 self.assertTrue(save.winfo_ismapped())
                 self.assertLessEqual(save.winfo_rooty() + save.winfo_height(), win.winfo_rooty() + win.winfo_height())
+                # the battery test row stays on screen too, and its buttons follow the UPS state
+                details = a.details_window
+                details.win.geometry("%dx%d" % (details.win.winfo_width(), max(300, details.win.winfo_height() // 2)))
+                a.root.update()
+                self.assertTrue(details.self_btn.winfo_ismapped())
+                self.assertEqual(details.self_btn.instate(["disabled"]), False)
+                self.assertEqual(details.abort_btn.instate(["disabled"]), True)
+                from upstray import ui
+                asked, shown = [], []
+                saved = ui.messagebox.askokcancel, ui.messagebox.showinfo
+                ui.messagebox.askokcancel = lambda *args, **kw: asked.append(args[1]) or True
+                ui.messagebox.showinfo = lambda *args, **kw: shown.append(args[1])
+                try:
+                    details.ask_test(device.CALIBRATION)          # the recording is at 99 %: refused
+                    self.assertEqual(asked, [])
+                    self.assertIn("99.0 %", shown[0])
+                    details.ask_test(device.QUICK_TEST)
+                    self.assertEqual(asked, ["Run a battery self-test now?"])
+                    self.assertEqual(a.poller._requests, [("test", device.QUICK_TEST, a.ups.identity())])
+                    self.assertTrue(details.self_btn.instate(["disabled"]))
+                finally:
+                    ui.messagebox.askokcancel, ui.messagebox.showinfo = saved
                 a.settings_window._toggle("output_voltage", "icon")
                 rows = a.settings_window.font_rows
                 rows["value"][0].set("arial")                 # typed in lower case

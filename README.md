@@ -6,8 +6,12 @@ temperature, frequency, and anything else the UPS reports. Every reading you
 pick gets **its own tray icon** that shows the value as a number, so you can
 see the mains voltage and the load at a glance without opening anything.
 
+It can also start the UPS's **battery self-test** and **runtime
+calibration**, and tells you the result.
+
 Works on Windows 10 and 11. Needs no driver, no service and no administrator
-rights. It only ever **reads** the UPS.
+rights. It reads the UPS and changes nothing on it, except that it starts or
+aborts a battery test when you ask for one.
 
 ![Tray icons for input voltage, load and battery charge](docs/tray.png)
 
@@ -57,14 +61,41 @@ The releases are not code-signed, so SmartScreen may warn the first time.
   reports, updated live, with **Copy all** and **Save device report**.
 
   ![Details window](docs/details.png)
-- **Right-click an icon** for the menu: Details, Settings, Start with Windows,
-  Open log folder, Exit.
+- **Right-click an icon** for the menu: Details, Settings, Battery test
+  (self-test, runtime calibration, abort), Start with Windows, Open log folder,
+  Exit.
 - **Starting UPS Tray again** (Start menu) shows the details of the running
   copy; `UpsTray.exe --settings` opens its Settings.
 - **Notifications** (optional): when the UPS has been on battery for a while,
   when mains returns, when the battery runs low, when the UPS stops
   answering. The on-battery notice waits (10 s by default) so short
   switch-overs, for example from a generator or an inverter, stay quiet.
+
+### Battery test
+
+The **Battery test** row at the bottom of the Details window, and the
+**Battery test** submenu of the tray menu, start the UPS's own tests:
+
+- **Self-test**: the UPS switches to battery for a few seconds, checks the
+  battery and switches back. A notification gives the result: passed, warning
+  or error.
+- **Runtime calibration**: the UPS runs your equipment on battery until the
+  battery is down to about 25 %, then goes back to mains power and recharges.
+  This teaches it how long the battery really lasts, for example after a
+  battery replacement. It needs a full battery (100 %) and a load of at least
+  10 %, and it can take an hour or more. The UPS can show 100 % before a large
+  battery is really full, so for an accurate result leave it on mains for
+  several hours first. Until the battery has recharged, it cannot carry the
+  load for as long if mains power fails.
+- **Abort** stops a running test.
+
+Every test asks for confirmation, and right before it sends the command UPS
+Tray checks the UPS again: on mains power, no test running, and for a
+calibration the charge and the load. While a test runs, the Details window
+shows how long it has been running (and the charge, during a calibration).
+Tests that the UPS runs by itself, such as its regular self-test or one
+started with its front-panel button, are followed too, with a notification of
+the result.
 
 ### Settings
 
@@ -92,7 +123,7 @@ battery date, and takes the rated power for the *Load power* reading.
 
 The Details window also lists the UPS settings it reports (transfer
 voltages, nominal voltages, low-battery limits, alarm), the battery and UPS
-dates, the last self-test result and the status bits (mains present,
+dates, the last battery test result and the status bits (mains present,
 charging, discharging, overload, replace battery ...).
 
 Values are decoded with the HID unit rules (the UPS says what each number
@@ -105,8 +136,10 @@ saved device report show what a particular model offers.
 ## Works alongside
 
 - **Windows' own UPS support** (the "HID UPS Battery" driver) and
-  **PowerChute Serial Shutdown** both keep working: UPS Tray opens the UPS
-  for reading only and never takes it over.
+  **PowerChute Serial Shutdown** both keep working: UPS Tray shares the UPS
+  and never takes it over. When Windows wants the UPS back, to change its
+  driver or to remove it, UPS Tray closes it at once and finds it again
+  afterwards.
 - With Windows' battery driver attached, Windows rewrites the UPS's
   low-capacity limit to just below the current charge, so that the UPS
   reports every change. UPS Tray therefore does not treat that limit as
@@ -122,7 +155,7 @@ UpsTray.exe                start (or show the details of the running copy)
 UpsTray.exe --settings     open Settings (in the running copy, or at start)
 UpsTray.exe --quit         ask the running copy to exit
 UpsTray.exe --version      print the version
-UpsTray.exe --selftest     read-only checks; pass without a UPS
+UpsTray.exe --selftest     read-only checks of UPS Tray itself; pass without a UPS
 UpsTray.exe --dump         JSON report of the connected UPS (descriptor and values)
 --out <file>               write the output to a file (the exe has no console)
 ```
@@ -145,17 +178,23 @@ copy and removes the sign-in entry. Your settings and log in
 ## How it works
 
 - `winhid.py` finds HID collections with usage page Power Device (0x84) and
-  reads them through `hid.dll`: feature reports only, with
-  `HidD_GetFeature`. The write calls (`HidD_SetFeature`, output reports,
-  `WriteFile`) are not even bound, and a unit test fails if any of them
-  appears in the code, so the app cannot change a UPS setting, start a test
+  reads them through `hid.dll` (feature reports, with `HidD_GetFeature`) on a
+  handle opened without read or write access. Its one write, `write_test()`,
+  sets the Test usage (0x84:0x58) to start, clear or abort a battery test: it
+  takes only those four values, refuses a report that carries anything besides
+  Test, and opens a handle with write access just for that command. Output
+  reports, `WriteFile` and `DeviceIoControl` are not bound at all, and unit
+  tests fail if any other code writes, so the app cannot change a UPS setting
   or switch the output off.
 - `model.py` names the descriptor's usages (HID Power Device and Battery
   System pages), applies the units (a volt is 10^7 cgs units, so an APC
   battery voltage of 2727 with exponent 5 is 27.27 V), picks the well-known
   readings and derives the power status.
 - `device.py` reads only the reports the visible icons and tooltips need,
-  every 2 seconds by default, and reconnects when the UPS comes back.
+  every 2 seconds by default, and reconnects when the UPS comes back. It
+  starts a battery test the way apcupsd's `apctest` does: abort anything
+  running, clear the last result, wait until the UPS reports no test, then
+  send the command.
 - `glyphs.py` draws each value with GDI into a 32-bit icon with real alpha,
   choosing the font size (Bahnschrift Condensed first) that fits the icon size
   of your display scaling.

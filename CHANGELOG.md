@@ -4,6 +4,32 @@ All notable changes to UPS Tray are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semantic versioning](https://semver.org/).
 
+## [1.3.0] - 2026-10-26
+
+### Added
+
+- Battery self-test and runtime calibration: a Battery test row in the
+  Details window and a Battery test submenu in the tray menu start the UPS's
+  own tests, and abort a running one. Every test asks for confirmation, and
+  UPS Tray checks the UPS again right before it sends the command (on mains,
+  no test running; for a calibration a full battery and at least 10 % load).
+  A notification gives the result, also for tests the UPS runs by itself.
+
+### Changed
+
+- For this, UPS Tray now writes to the UPS, and only for this: one value
+  (the Test control) in a report that carries nothing else, through a handle
+  opened for that one command. Unit tests fail if any other code writes.
+
+### Fixed
+
+- UPS Tray no longer holds Windows up when it removes the UPS or changes its
+  driver: it closes the device on Windows' notice and finds it again
+  afterwards. Before, its open handle made Windows postpone such a change
+  until the next restart.
+- Two notifications that arrive together are both shown, one after the
+  other; before, the second could replace the first.
+
 ## [1.2.0] - 2026-10-24
 
 ### Added

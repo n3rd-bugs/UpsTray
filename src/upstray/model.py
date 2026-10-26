@@ -279,6 +279,7 @@ TRAY_LABELS = {
 
 TEST_RESULTS = {1: "Passed", 2: "Warning", 3: "Error", 4: "Aborted", 5: "In progress",
                 6: "No test initiated"}
+TEST_NAMES = {0: "Battery test", 1: "Battery self-test", 2: "Runtime calibration", 3: "Battery test"}
 ALARM_STATES = {1: "Disabled", 2: "Enabled", 3: "Muted"}
 CAPACITY_MODES = {0: "mAh", 1: "mWh", 2: "%", 3: "Boolean"}
 
@@ -378,7 +379,7 @@ def build_readings(fields, nominal_watts=0, capacity_mode=None):
         kind="date", tray=False)
     add("ups_date", "UPS date", "Device", _first(fields, BATTERY, 0x85, ("PowerSummary", "UPS")), "",
         kind="date", tray=False)
-    add("self_test", "Self-test result", "Battery", _first(fields, POWER, 0x58), "", kind="enum",
+    add("self_test", "Battery test result", "Battery", _first(fields, POWER, 0x58), "", kind="enum",
         tray=False, enum=TEST_RESULTS)
     add("alarm", "Audible alarm", "Settings", _first(fields, POWER, 0x5A, ("PowerSummary", "UPS")), "",
         kind="enum", tray=False, enum=ALARM_STATES)
